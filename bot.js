@@ -1,4 +1,32 @@
 import 'dotenv/config';
+
+// --- muhit o'zgaruvchilarini tekshirish ---
+const missing = ['BOT_TOKEN', 'DATABASE_URL', 'ENC_KEY'].filter(k => !process.env[k]);
+if (missing.length) {
+  console.error(`XATO: quyidagi o'zgaruvchilar yo'q: ${missing.join(', ')}`);
+  console.error('Railway -> servis -> Variables bo\'limiga qo\'shing.');
+  process.exit(1);
+}
+if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENC_KEY)) {
+  console.error("XATO: ENC_KEY 64 ta hex belgi bo'lishi kerak (32 bayt).");
+  console.error('Yaratish: openssl rand -hex 32');
+  process.exit(1);
+}
+
+// --- DATABASE_URL tekshiruvi ---
+try {
+  const u = new URL(process.env.DATABASE_URL);
+  console.log(`DB: host=${u.hostname} port=${u.port} user=${u.username} db=${u.pathname.slice(1)} parol=${u.password ? 'bor' : 'YO\'Q'}`);
+  if (!u.password) {
+    console.error("XATO: DATABASE_URL ichida parol yo'q.");
+    console.error('Railway -> Variables -> DATABASE_URL = ${{Postgres.DATABASE_URL}}');
+    process.exit(1);
+  }
+} catch {
+  console.error('XATO: DATABASE_URL noto\'g\'ri formatda:', process.env.DATABASE_URL?.slice(0, 30));
+  process.exit(1);
+}
+
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import { EmaktabSession } from './emaktab.js';
 import { getCreds, setCreds, saveState, getState, ensureSchema } from './db.js';
