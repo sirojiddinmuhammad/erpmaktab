@@ -98,8 +98,8 @@ bot.on('message:text', async (ctx, next) => {
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       '✅ Ulandi. Endi /import buyrug\'ini bosing.');
   } catch (e) {
-    const msg = e.message === 'BAD_CREDENTIALS'
-      ? '❌ Login yoki parol noto\'g\'ri. /login orqali qayta urinib ko\'ring.'
+    const msg = e.message.startsWith('BAD_CREDENTIALS')
+      ? "❌ Login yoki parol noto'g'ri. /login orqali qayta urinib ko'ring."
       : `❌ Xatolik: ${e.message}`;
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id, msg);
   } finally {

@@ -48,20 +48,59 @@ export class EmaktabSession {
     this.page.setDefaultTimeout(30_000);
 
     await this.page.goto(IMPORT_URL, { waitUntil: 'domcontentloaded' });
-    // login sahifasiga otib yuborsa — sessiya eskirgan
-    return !/login/i.test(this.page.url());
+    // login subdomeniga otib yuborsa — sessiya eskirgan
+    return !/login\.emaktab\.uz/.test(this.page.url());
   }
 
   async login(username, password) {
-    await this.page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+    const page = this.page;
+    await page.goto('https://login.emaktab.uz/login', { waitUntil: 'domcontentloaded' });
 
-    // TEKSHIRING: input name'lari DevTools orqali tasdiqlansin
-    await this.page.fill('input[name="login"]', username);
-    await this.page.fill('input[name="password"]', password);
-    await this.page.click('button[type="submit"], input[type="submit"]');
-    await this.page.waitForLoadState('networkidle');
+    const userCandidates = [
+      'input[name="login"]',
+      'input[name="Login"]',
+      'input[name="username"]',
+      'input[name="UserName"]',
+      '#login',
+      'input[type="text"]:not([type="hidden"])',
+      'input[type="email"]',
+    ];
 
-    if (/login/i.test(this.page.url())) throw new Error('BAD_CREDENTIALS');
+    let userInput = null;
+    for (const s of userCandidates) {
+      const loc = page.locator(s).first();
+      if (await loc.count() && await loc.isVisible().catch(() => false)) {
+        userInput = loc;
+        break;
+      }
+    }
+
+    const passInput = page.locator('input[type="password"]').first();
+
+    if (!userInput || !(await passInput.count())) {
+      // Sahifadagi maydonlarni ro'yxatlab beramiz — selektorni aniqlash uchun
+      const found = await page.locator('input').evaluateAll(list =>
+        list.map(i => `${i.type}|name=${i.name}|id=${i.id}`).join('  ///  ')
+      );
+      throw new Error(`Login maydoni topilmadi. URL: ${page.url()}\nSahifadagi inputlar: ${found || 'yo\'q'}`);
+    }
+
+    await userInput.fill(username);
+    await passInput.fill(password);
+
+    await Promise.all([
+      page.waitForLoadState('networkidle'),
+      page.locator('button[type="submit"], input[type="submit"]').first().click(),
+    ]).catch(() => {});
+
+    await page.waitForTimeout(2000);
+
+    if (/login\.emaktab\.uz/.test(page.url())) {
+      const err = await page.locator('.error, .alert, [class*="error"]').first()
+        .innerText().catch(() => '');
+      throw new Error(err ? `BAD_CREDENTIALS: ${err.slice(0, 120)}` : 'BAD_CREDENTIALS');
+    }
+
     return await this.ctx.storageState();
   }
 
