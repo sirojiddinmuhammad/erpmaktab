@@ -27,9 +27,9 @@ try {
   process.exit(1);
 }
 
-import { Bot, InlineKeyboard, InputFile } from 'grammy';
+import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { EmaktabSession } from './emaktab.js';
-import { getCreds, setCreds, saveState, getState, ensureSchema } from './db.js';
+import { getCreds, setCreds, saveState, getState, getName, ensureSchema } from './db.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -39,6 +39,14 @@ const TIMEOUT = 10 * 60 * 1000;
 
 // userId -> { es, step, fields, picked }
 const live = new Map();
+const pending = new Map(); // userId -> { stage, username }
+
+// Pastda doimiy turadigan tugmalar
+const mainKb = new Keyboard()
+  .text('📤 Import').row()
+  .text('🔑 Login').text('❌ Bekor')
+  .resized()
+  .persistent();
 
 const FIELDS = [
   { label: 'Учебный год', ask: "O'quv yili" },
@@ -60,22 +68,38 @@ async function endSession(id) {
   if (s) { await s.es.close(); live.delete(id); }
 }
 
-bot.command('start', ctx =>
-  ctx.reply('Salom! Dars mavzularini eMaktabga yuklash uchun /import buyrug\'ini bosing.')
-);
+bot.command('start', async ctx => {
+  const name = await getName(ctx.from.id);
+  await ctx.reply(
+    name
+      ? `Salom, ${name}! Yuklash uchun "📤 Import" tugmasini bosing.`
+      : 'Salom! Avval "🔑 Login" tugmasi orqali eMaktab hisobingizni ulang.',
+    { reply_markup: mainKb }
+  );
+});
+
+// Tugmalar buyruqlar bilan bir xil ishlaydi
+bot.hears('📤 Import', ctx => startImport(ctx));
+bot.hears('🔑 Login', ctx => startLogin(ctx));
+bot.hears('❌ Bekor', async ctx => {
+  pending.delete(ctx.from.id);
+  await endSession(ctx.from.id);
+  await ctx.reply('Bekor qilindi.', { reply_markup: mainKb });
+});
 
 // ---------- /login ----------
-const pending = new Map(); // userId -> { stage, username }
 
-bot.command('login', async ctx => {
+async function startLogin(ctx) {
   pending.set(ctx.from.id, { stage: 'user' });
   await ctx.reply('eMaktab loginingizni yuboring:');
-});
+}
+bot.command('login', startLogin);
 
 bot.on('message:text', async (ctx, next) => {
   const id = ctx.from.id;
   const p = pending.get(id);
   if (!p || ctx.message.text.startsWith('/')) return next();
+  if (['📤 Import', '🔑 Login', '❌ Bekor'].includes(ctx.message.text)) return next();
 
   if (p.stage === 'user') {
     p.username = ctx.message.text.trim();
@@ -92,11 +116,13 @@ bot.on('message:text', async (ctx, next) => {
   const es = new EmaktabSession();
   try {
     await es.launch();
-    const state = await es.login(p.username, password);
-    await setCreds(id, p.username, password);
+    const { state, fullName } = await es.login(p.username, password);
+    await setCreds(id, p.username, password, fullName);
     await saveState(id, state);
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
-      '✅ Ulandi. Endi /import buyrug\'ini bosing.');
+      fullName
+        ? `✅ Ulandi: ${fullName}\n\nEndi "📤 Import" tugmasini bosing.`
+        : '✅ Ulandi. Endi "📤 Import" tugmasini bosing.');
   } catch (e) {
     const msg = e.message.startsWith('BAD_CREDENTIALS')
       ? "❌ Login yoki parol noto'g'ri. /login orqali qayta urinib ko'ring."
@@ -107,15 +133,16 @@ bot.on('message:text', async (ctx, next) => {
   }
 });
 
-bot.command('import', async ctx => {
+async function startImport(ctx) {
   const id = ctx.from.id;
   if (!(await getCreds(id)))
-    return ctx.reply('Avval /login orqali eMaktab hisobingizni ulang.');
+    return ctx.reply('Avval "🔑 Login" tugmasi orqali hisobingizni ulang.', { reply_markup: mainKb });
 
   await endSession(id);
   live.set(id, { es: new EmaktabSession(), step: 'await_file', fields: [], picked: {} });
-  await ctx.reply('Excel faylni yuboring (.xls yoki .xlsx).');
-});
+  await ctx.reply('Excel faylni yuboring (.xls yoki .xlsx).', { reply_markup: mainKb });
+}
+bot.command('import', startImport);
 
 bot.command('debug', async ctx => {
   const s = live.get(ctx.from.id);

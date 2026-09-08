@@ -26,14 +26,19 @@ function dec(b64) {
   return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString('utf8');
 }
 
-export async function setCreds(userId, username, password) {
+export async function setCreds(userId, username, password, fullName = null) {
   await pool.query(
-    `insert into teachers (tg_id, username, password_enc)
-     values ($1, $2, $3)
+    `insert into teachers (tg_id, username, password_enc, full_name)
+     values ($1, $2, $3, $4)
      on conflict (tg_id) do update
-       set username = $2, password_enc = $3, storage_state = null`,
-    [userId, username, enc(password)]
+       set username = $2, password_enc = $3, full_name = $4, storage_state = null`,
+    [userId, username, enc(password), fullName]
   );
+}
+
+export async function getName(userId) {
+  const { rows } = await pool.query('select full_name from teachers where tg_id = $1', [userId]);
+  return rows[0]?.full_name || null;
 }
 
 export async function getCreds(userId) {
@@ -69,6 +74,8 @@ create table if not exists teachers (
   state_at      timestamptz,
   created_at    timestamptz default now()
 );
+
+alter table teachers add column if not exists full_name text;
 
 create table if not exists imports (
   id         bigserial primary key,

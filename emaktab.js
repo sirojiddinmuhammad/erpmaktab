@@ -129,7 +129,35 @@ export class EmaktabSession {
       throw new Error(err ? `BAD_CREDENTIALS: ${err.slice(0, 120)}` : 'BAD_CREDENTIALS');
     }
 
-    return await this.ctx.storageState();
+    const fullName = await this.getUserName();
+    return { state: await this.ctx.storageState(), fullName };
+  }
+
+  // Sahifa sarlavhasidan foydalanuvchi ismini o'qiydi
+  async getUserName() {
+    return await this.page.evaluate(() => {
+      const clean = t => (t || '').replace(/\s+/g, ' ').trim();
+      const junk = /Помощь|Выход|Yordam|Chiqish|Сотрудник|Учитель|Xodim|O'qituvchi/gi;
+
+      // "Выход" havolasi yonidagi blokda ism turadi
+      const exit = [...document.querySelectorAll('a')]
+        .find(a => /Выход|Chiqish/i.test(a.textContent));
+      if (exit) {
+        let n = exit.parentElement;
+        for (let i = 0; i < 5 && n; i++, n = n.parentElement) {
+          const t = clean(n.innerText).replace(junk, '').trim();
+          if (t.length >= 4 && t.length <= 60 && /[А-ЯЁA-Z]/.test(t)) return t;
+        }
+      }
+
+      // Zaxira: profil havolasidagi matn
+      const prof = document.querySelector('[class*="user"] a, [class*="profile"] a, a[href*="/user/"]');
+      if (prof) {
+        const t = clean(prof.textContent).replace(junk, '').trim();
+        if (t.length >= 4) return t;
+      }
+      return '';
+    }).catch(() => '');
   }
 
   // ---- 1-qadam: fayl ----
