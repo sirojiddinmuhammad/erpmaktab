@@ -198,27 +198,49 @@ export class EmaktabSession {
 
   // ---- ustun mosligi: avtomatik ----
   async mapColumns() {
-    for (const [fileCol, target] of Object.entries(COLUMN_MAP)) {
-      const s = this.page.locator(
-        `xpath=//tr[td[normalize-space()="${fileCol}"]]//select`
-      );
-      if (await s.count()) await s.first().selectOption({ label: target });
+    // Sahifadagi barcha selectlarni ko'rib chiqib, qator matniga qarab moslaymiz
+    const plan = await this.page.evaluate((MAP) => {
+      const norm = t => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const selects = [...document.querySelectorAll('select')];
+      const report = [];
+      const actions = [];
+
+      for (const [fileCol, target] of Object.entries(MAP)) {
+        const si = selects.findIndex(sel => {
+          const row = sel.closest('tr') || sel.closest('[class*="row"]') || sel.parentElement?.parentElement;
+          return row && norm(row.textContent).includes(norm(fileCol));
+        });
+
+        if (si === -1) { report.push(`${fileCol}: qator topilmadi`); continue; }
+
+        const opts = [...selects[si].options];
+        let oi = opts.findIndex(o => norm(o.textContent) === norm(target));
+        if (oi === -1) oi = opts.findIndex(o => norm(o.textContent).includes(norm(target)));
+
+        if (oi === -1) {
+          report.push(`${fileCol}: "${target}" yo'q. Bor: ${opts.map(o => o.textContent.trim()).join(' | ')}`);
+          continue;
+        }
+        actions.push({ selectIndex: si, optionIndex: oi });
+        report.push(`${fileCol} -> ${target}`);
+      }
+      return { actions, report };
+    }, COLUMN_MAP);
+
+    // Haqiqiy hodisalar chiqishi uchun Playwright orqali tanlaymiz
+    for (const a of plan.actions) {
+      await this.page.locator('select').nth(a.selectIndex)
+        .selectOption({ index: a.optionIndex });
     }
+
+    this.lastMapReport = plan.report.join('\n');
+    if (!plan.actions.length) {
+      throw new Error(`Ustun mosligi qo'yilmadi:\n${this.lastMapReport}`);
+    }
+
     await this.page.click('text=Далее');
     await this.page.waitForSelector('table tr', { timeout: 30000 }).catch(() => {});
-    await this.settle(300);
-  }
-
-  // ---- 3-qadam: tekshiruv jadvali ----
-  async preview() {
-    const rows = await this.page.locator('table tr').evaluateAll(trs =>
-      trs
-        .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))
-        .filter(c => c.length >= 4 && /^\d+$/.test(c[0]))
-        .map(c => ({ n: c[0], lesson: c[1], topic: c[2], hw: c[3], status: c.at(-1) }))
-    );
-    const bad = rows.filter(r => !/Готов/i.test(r.status));
-    return { rows, ok: rows.length - bad.length, bad };
+    await this.settle(400);
   }
 
   // ---- 4-qadam ----

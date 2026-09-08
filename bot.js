@@ -244,12 +244,20 @@ async function showPreview(ctx, id) {
   const s = live.get(id);
   await ctx.reply('Ustunlar moslanyapti...');
 
-  await s.es.mapColumns();
-  const { rows, ok, bad } = await s.es.preview();
+  try {
+    await s.es.mapColumns();
+  } catch (e) {
+    await endSession(id);
+    return ctx.reply(`❌ ${e.message}`);
+  }
+
+  const { rows, ok, bad, diag, mapReport } = await s.es.preview();
 
   if (!rows.length) {
     await endSession(id);
-    return ctx.reply("Jadval bo'sh chiqdi. Faylni tekshirib qayta urinib ko'ring.");
+    return ctx.reply(
+      `❌ Tekshiruv jadvali topilmadi.\n\nUstun mosligi:\n${mapReport}\n\n${diag}`.slice(0, 3800)
+    );
   }
 
   const list = rows.slice(0, 10)
