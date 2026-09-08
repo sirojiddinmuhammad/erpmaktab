@@ -28,7 +28,10 @@ export class EmaktabSession {
   }
 
   async launch() {
-    this.browser = await chromium.launch({ headless: true });
+    this.browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    });
     this.ctx = await this.browser.newContext({ locale: 'ru-RU' });
     this.page = await this.ctx.newPage();
     this.page.setDefaultTimeout(30_000);
@@ -36,7 +39,10 @@ export class EmaktabSession {
 
   // storageState bo'lsa qayta login qilinmaydi
   async restore(storageState) {
-    this.browser = await chromium.launch({ headless: true });
+    this.browser = await chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+    });
     this.ctx = await this.browser.newContext({ locale: 'ru-RU', storageState });
     this.page = await this.ctx.newPage();
     this.page.setDefaultTimeout(30_000);
