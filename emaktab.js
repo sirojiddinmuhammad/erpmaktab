@@ -27,6 +27,13 @@ export class EmaktabSession {
     );
   }
 
+  // Sahifa tinchishini kutish. networkidle ishlatmaymiz —
+  // eMaktab doimiy so'rov yuborib turadi va u hech qachon tugamaydi.
+  async settle(ms = 1200) {
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    await this.page.waitForTimeout(ms);
+  }
+
   async launch() {
     this.browser = await chromium.launch({
       headless: true,
@@ -88,12 +95,10 @@ export class EmaktabSession {
     await userInput.fill(username);
     await passInput.fill(password);
 
-    await Promise.all([
-      page.waitForLoadState('networkidle'),
-      page.locator('button[type="submit"], input[type="submit"]').first().click(),
-    ]).catch(() => {});
-
-    await page.waitForTimeout(2000);
+    await page.locator('button[type="submit"], input[type="submit"]').first().click();
+    await page.waitForURL(u => !/login\.emaktab\.uz/.test(u.href), { timeout: 20000 })
+      .catch(() => {});
+    await page.waitForTimeout(1500);
 
     if (/login\.emaktab\.uz/.test(page.url())) {
       const err = await page.locator('.error, .alert, [class*="error"]').first()
@@ -112,13 +117,13 @@ export class EmaktabSession {
     const cancel = this.page.locator('text=Отменить импорт этого файла');
     if (await cancel.count()) {
       await cancel.first().click();
-      await this.page.waitForLoadState('networkidle');
+      await this.settle();
     }
 
     await this.page.setInputFiles('input[type="file"]', filePath);
     await this.page.check('input[type="radio"][value*="header"], input[type="radio"]'); // 1-qatorda ustun nomlari
     await this.page.click('text=Далее');
-    await this.page.waitForLoadState('networkidle');
+    await this.settle(2000);
   }
 
   // ---- 2-qadam: selectlar ----
@@ -133,8 +138,9 @@ export class EmaktabSession {
     while (Date.now() < deadline) {
       last = await s.locator('option').evaluateAll(list =>
         list
-          .map(o => ({ value: o.value, label: o.textContent.trim() }))
-          .filter(o => o.value && !/^(Не выбрано|Не выбран|—|-|)$/i.test(o.label))
+          .map((o, index) => ({ index, value: o.value, label: o.textContent.trim() }))
+          // Faqat matn bo'yicha filtr: "Весь класс" kabi variantlarda value bo'sh bo'lishi mumkin
+          .filter(o => o.label && !/^(Не выбрано|Не выбран|—|-)$/i.test(o.label))
       );
       if (last.length) return last;
       await this.page.waitForTimeout(500);
@@ -153,11 +159,18 @@ export class EmaktabSession {
     return `select topildi (disabled=${disabled}), optionlar: ${raw || 'bo\'sh'}`;
   }
 
-  async pick(label, value) {
-    await this.sel(label).selectOption(value);
+  // index bo'yicha tanlaymiz — bo'sh value'li variantlar uchun ishonchli
+  // Barcha selectlarni xom holda ko'rsatadi (/debug uchun)
+  async dumpAll(labels) {
+    const out = [];
+    for (const l of labels) out.push(`${l}: ${await this.debugSelect(l)}`);
+    return out.join('\n\n');
+  }
+
+  async pick(label, index) {
+    await this.sel(label).selectOption({ index });
     // tanlovdan keyin bog'liq ro'yxatlar qayta yuklanadi
-    await this.page.waitForLoadState('networkidle').catch(() => {});
-    await this.page.waitForTimeout(800);
+    await this.settle(1200);
   }
 
   // ---- ustun mosligi: avtomatik ----
@@ -169,7 +182,7 @@ export class EmaktabSession {
       if (await s.count()) await s.first().selectOption({ label: target });
     }
     await this.page.click('text=Далее');
-    await this.page.waitForLoadState('networkidle');
+    await this.settle(2000);
   }
 
   // ---- 3-qadam: tekshiruv jadvali ----
@@ -187,7 +200,7 @@ export class EmaktabSession {
   // ---- 4-qadam ----
   async confirmImport() {
     await this.page.click('text=Импортировать >');
-    await this.page.waitForLoadState('networkidle');
+    await this.settle(3000);
     return await this.page.screenshot({ fullPage: false });
   }
 

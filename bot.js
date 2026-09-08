@@ -117,6 +117,18 @@ bot.command('import', async ctx => {
   await ctx.reply('Excel faylni yuboring (.xls yoki .xlsx).');
 });
 
+bot.command('debug', async ctx => {
+  const s = live.get(ctx.from.id);
+  if (!s?.es?.page) return ctx.reply('Avval /import qilib fayl yuboring, keyin /debug.');
+  try {
+    const dump = await s.es.dumpAll(FIELDS.map(f => f.label));
+    for (let i = 0; i < dump.length; i += 3500)
+      await ctx.reply(dump.slice(i, i + 3500));
+  } catch (e) {
+    await ctx.reply(`debug xato: ${e.message}`);
+  }
+});
+
 bot.command('cancel', async ctx => {
   await endSession(ctx.from.id);
   await ctx.reply('Bekor qilindi.');
@@ -190,7 +202,7 @@ async function askNext(ctx, id) {
 
   // variant bitta bo'lsa — so'ramaymiz
   if (opts.length === 1) {
-    await s.es.pick(field.label, opts[0].value);
+    await s.es.pick(field.label, opts[0].index);
     s.picked[field.ask] = opts[0].label;
     return askNext(ctx, id);
   }
@@ -216,7 +228,7 @@ bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(`${s.current.ask}: ${opt.label} ✅`);
 
-  await s.es.pick(s.current.label, opt.value);
+  await s.es.pick(s.current.label, opt.index);
   s.picked[s.current.ask] = opt.label;
   s.current = null;
 
