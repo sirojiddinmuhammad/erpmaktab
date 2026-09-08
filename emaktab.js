@@ -10,6 +10,33 @@ const COLUMN_MAP = {
   'Дом. Задания': 'Домашнее задание',
 };
 
+// Bitta brauzer hammaga xizmat qiladi, har foydalanuvchiga alohida context.
+// Har safar yangi brauzer ochish 2-4 soniya olardi.
+let sharedBrowser = null;
+async function getBrowser() {
+  if (sharedBrowser?.isConnected()) return sharedBrowser;
+  sharedBrowser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+  });
+  return sharedBrowser;
+}
+
+// Rasm, shrift, video, analitika — bizga kerak emas. Sezilarli tezlashtiradi.
+async function blockJunk(ctx) {
+  await ctx.route('**/*', route => {
+    const t = route.request().resourceType();
+    if (t === 'image' || t === 'font' || t === 'media' || t === 'stylesheet') {
+      return route.abort();
+    }
+    const u = route.request().url();
+    if (/google-analytics|googletagmanager|yandex|metrika|facebook|doubleclick/i.test(u)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+}
+
 export class EmaktabSession {
   constructor() {
     this.browser = null;
@@ -35,22 +62,18 @@ export class EmaktabSession {
   }
 
   async launch() {
-    this.browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    });
+    this.browser = await getBrowser();
     this.ctx = await this.browser.newContext({ locale: 'ru-RU' });
+    await blockJunk(this.ctx);
     this.page = await this.ctx.newPage();
     this.page.setDefaultTimeout(30_000);
   }
 
   // storageState bo'lsa qayta login qilinmaydi
   async restore(storageState) {
-    this.browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    });
+    this.browser = await getBrowser();
     this.ctx = await this.browser.newContext({ locale: 'ru-RU', storageState });
+    await blockJunk(this.ctx);
     this.page = await this.ctx.newPage();
     this.page.setDefaultTimeout(30_000);
 
@@ -98,7 +121,7 @@ export class EmaktabSession {
     await page.locator('button[type="submit"], input[type="submit"]').first().click();
     await page.waitForURL(u => !/login\.emaktab\.uz/.test(u.href), { timeout: 20000 })
       .catch(() => {});
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(600);
 
     if (/login\.emaktab\.uz/.test(page.url())) {
       const err = await page.locator('.error, .alert, [class*="error"]').first()
@@ -123,7 +146,7 @@ export class EmaktabSession {
     await this.page.setInputFiles('input[type="file"]', filePath);
     await this.page.check('input[type="radio"][value*="header"], input[type="radio"]'); // 1-qatorda ustun nomlari
     await this.page.click('text=Далее');
-    await this.settle(2000);
+    await this.settle(400);
   }
 
   // ---- 2-qadam: selectlar ----
@@ -169,8 +192,8 @@ export class EmaktabSession {
 
   async pick(label, index) {
     await this.sel(label).selectOption({ index });
-    // tanlovdan keyin bog'liq ro'yxatlar qayta yuklanadi
-    await this.settle(1200);
+    // Uzoq kutmaymiz: keyingi options() o'zi to'lguncha so'rab turadi
+    await this.settle(250);
   }
 
   // ---- ustun mosligi: avtomatik ----
@@ -182,7 +205,8 @@ export class EmaktabSession {
       if (await s.count()) await s.first().selectOption({ label: target });
     }
     await this.page.click('text=Далее');
-    await this.settle(2000);
+    await this.page.waitForSelector('table tr', { timeout: 30000 }).catch(() => {});
+    await this.settle(300);
   }
 
   // ---- 3-qadam: tekshiruv jadvali ----
@@ -205,6 +229,7 @@ export class EmaktabSession {
   }
 
   async close() {
-    try { await this.browser?.close(); } catch {}
+    // Brauzer umumiy — faqat o'z contextimizni yopamiz
+    try { await this.ctx?.close(); } catch {}
   }
 }

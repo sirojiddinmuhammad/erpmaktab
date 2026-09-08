@@ -166,7 +166,9 @@ bot.on('message:document', async ctx => {
       await saveState(id, await s.es.login(username, password));
     }
 
+    const tUp = Date.now();
     await s.es.uploadFile(local);
+    console.log(`[vaqt] fayl yuklash: ${((Date.now() - tUp) / 1000).toFixed(1)}s`);
     await fs.unlink(local).catch(() => {});
 
     s.step = 'fields';
@@ -190,7 +192,9 @@ async function askNext(ctx, id) {
   const field = s.fields.shift();
   if (!field) return showPreview(ctx, id);
 
+  const t0 = Date.now();
   const opts = await s.es.options(field.label);
+  console.log(`[vaqt] ${field.label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
   if (!opts.length) {
     const info = await s.es.debugSelect(field.label);
