@@ -122,20 +122,42 @@ export class EmaktabSession {
   }
 
   // ---- 2-qadam: selectlar ----
-  async options(label) {
+  async options(label, { timeout = 20000 } = {}) {
     const s = this.sel(label);
-    await s.waitFor({ state: 'attached' });
-    return await s.locator('option').evaluateAll(list =>
-      list
-        .map(o => ({ value: o.value, label: o.textContent.trim() }))
-        .filter(o => o.value && !/^(Не выбрано|—|-)$/i.test(o.label))
+    await s.waitFor({ state: 'attached', timeout });
+
+    const deadline = Date.now() + timeout;
+    let last = [];
+
+    // Bog'liq ro'yxatlar AJAX bilan to'ladi — to'lguncha kutamiz
+    while (Date.now() < deadline) {
+      last = await s.locator('option').evaluateAll(list =>
+        list
+          .map(o => ({ value: o.value, label: o.textContent.trim() }))
+          .filter(o => o.value && !/^(Не выбрано|Не выбран|—|-|)$/i.test(o.label))
+      );
+      if (last.length) return last;
+      await this.page.waitForTimeout(500);
+    }
+    return last;
+  }
+
+  // Diagnostika: select bo'sh chiqqanda nima borligini ko'rsatadi
+  async debugSelect(label) {
+    const s = this.sel(label);
+    if (!(await s.count())) return `"${label}" uchun select topilmadi`;
+    const raw = await s.locator('option').evaluateAll(l =>
+      l.map(o => `[${o.value}] ${o.textContent.trim()}`).join(' // ')
     );
+    const disabled = await s.isDisabled().catch(() => null);
+    return `select topildi (disabled=${disabled}), optionlar: ${raw || 'bo\'sh'}`;
   }
 
   async pick(label, value) {
     await this.sel(label).selectOption(value);
-    // sinf tanlangach fan ro'yxati qayta yuklanadi
+    // tanlovdan keyin bog'liq ro'yxatlar qayta yuklanadi
     await this.page.waitForLoadState('networkidle').catch(() => {});
+    await this.page.waitForTimeout(800);
   }
 
   // ---- ustun mosligi: avtomatik ----

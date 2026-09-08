@@ -180,6 +180,14 @@ async function askNext(ctx, id) {
 
   const opts = await s.es.options(field.label);
 
+  if (!opts.length) {
+    const info = await s.es.debugSelect(field.label);
+    await endSession(id);
+    return ctx.reply(
+      `❌ "${field.ask}" ro'yxati bo'sh chiqdi.\n\n${info}\n\n/import bilan qayta urinib ko'ring.`
+    );
+  }
+
   // variant bitta bo'lsa — so'ramaymiz
   if (opts.length === 1) {
     await s.es.pick(field.label, opts[0].value);
