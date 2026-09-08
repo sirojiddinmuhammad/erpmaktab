@@ -198,49 +198,141 @@ export class EmaktabSession {
 
   // ---- ustun mosligi: avtomatik ----
   async mapColumns() {
-    // Sahifadagi barcha selectlarni ko'rib chiqib, qator matniga qarab moslaymiz
+    // Moslash selectlarida albatta "Номер урока" varianti bor.
+    // Shu belgi bilan ularni parametr selectlaridan (sinf, fan) ajratamiz.
+    await this.page.waitForFunction(() =>
+      [...document.querySelectorAll('select')].some(s =>
+        [...s.options].some(o => /номер\s*урока/i.test(o.textContent))
+      ), null, { timeout: 30000 }
+    ).catch(() => {});
+
     const plan = await this.page.evaluate((MAP) => {
       const norm = t => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const selects = [...document.querySelectorAll('select')];
-      const report = [];
+      const all = [...document.querySelectorAll('select')];
+
+      const mapping = all
+        .map((sel, idx) => ({ sel, idx }))
+        .filter(({ sel }) => [...sel.options].some(o => /номер\s*урока/i.test(o.textContent)));
+
+      if (!mapping.length) {
+        return {
+          actions: [],
+          report: [`Moslash selectlari topilmadi. Sahifada ${all.length} ta select bor.`],
+        };
+      }
+
+      // Selectning qatoridagi ustun nomini o'qish
+      const labelOf = sel => {
+        const tr = sel.closest('tr');
+        if (tr) {
+          for (const c of [...tr.querySelectorAll('td, th')])
+            if (!c.querySelector('select')) return c.textContent;
+        }
+        let n = sel.parentElement;
+        for (let i = 0; i < 3 && n; i++, n = n.parentElement) {
+          const t = n.textContent.replace(sel.textContent, '').trim();
+          if (t) return t;
+        }
+        return '';
+      };
+
+      const cols = Object.keys(MAP);
       const actions = [];
+      const report = [];
+      const used = new Set();
 
-      for (const [fileCol, target] of Object.entries(MAP)) {
-        const si = selects.findIndex(sel => {
-          const row = sel.closest('tr') || sel.closest('[class*="row"]') || sel.parentElement?.parentElement;
-          return row && norm(row.textContent).includes(norm(fileCol));
-        });
+      for (let ci = 0; ci < cols.length; ci++) {
+        const fileCol = cols[ci];
+        const target = MAP[fileCol];
 
-        if (si === -1) { report.push(`${fileCol}: qator topilmadi`); continue; }
+        // 1) qator nomi bo'yicha, 2) topilmasa tartib bo'yicha
+        let hit = mapping.find(m => !used.has(m.idx) && norm(labelOf(m.sel)).includes(norm(fileCol)));
+        if (!hit && mapping[ci] && !used.has(mapping[ci].idx)) hit = mapping[ci];
+        if (!hit) { report.push(`${fileCol}: mos select yo'q`); continue; }
 
-        const opts = [...selects[si].options];
+        const opts = [...hit.sel.options];
         let oi = opts.findIndex(o => norm(o.textContent) === norm(target));
         if (oi === -1) oi = opts.findIndex(o => norm(o.textContent).includes(norm(target)));
-
         if (oi === -1) {
           report.push(`${fileCol}: "${target}" yo'q. Bor: ${opts.map(o => o.textContent.trim()).join(' | ')}`);
           continue;
         }
-        actions.push({ selectIndex: si, optionIndex: oi });
+
+        used.add(hit.idx);
+        actions.push({ selectIndex: hit.idx, optionIndex: oi });
         report.push(`${fileCol} -> ${target}`);
       }
       return { actions, report };
     }, COLUMN_MAP);
 
-    // Haqiqiy hodisalar chiqishi uchun Playwright orqali tanlaymiz
     for (const a of plan.actions) {
-      await this.page.locator('select').nth(a.selectIndex)
-        .selectOption({ index: a.optionIndex });
+      await this.page.locator('select').nth(a.selectIndex).selectOption({ index: a.optionIndex });
     }
 
     this.lastMapReport = plan.report.join('\n');
-    if (!plan.actions.length) {
-      throw new Error(`Ustun mosligi qo'yilmadi:\n${this.lastMapReport}`);
-    }
+    // Uchalasi ham qo'yilmasa — qo'lda rejimga o'tamiz
+    return { done: plan.actions.length, need: Object.keys(COLUMN_MAP).length, report: this.lastMapReport };
+  }
 
+  // Qo'lda moslash uchun: moslash selectlari va ularning variantlari
+  async mappingSelects() {
+    await this.page.waitForFunction(() =>
+      [...document.querySelectorAll('select')].some(s =>
+        [...s.options].some(o => /номер\\s*урока/i.test(o.textContent))
+      ), null, { timeout: 20000 }
+    ).catch(() => {});
+
+    return await this.page.evaluate(() => {
+      const all = [...document.querySelectorAll('select')];
+      const labelOf = sel => {
+        const tr = sel.closest('tr');
+        if (tr) {
+          for (const c of [...tr.querySelectorAll('td, th')])
+            if (!c.querySelector('select')) return c.textContent.replace(/\\s+/g, ' ').trim();
+        }
+        return '';
+      };
+      return all
+        .map((sel, selectIndex) => ({ sel, selectIndex }))
+        .filter(({ sel }) => [...sel.options].some(o => /номер\\s*урока/i.test(o.textContent)))
+        .map(({ sel, selectIndex }) => ({
+          selectIndex,
+          label: labelOf(sel) || `Ustun ${selectIndex}`,
+          options: [...sel.options].map((o, index) => ({ index, label: o.textContent.trim() })),
+        }));
+    });
+  }
+
+  async setSelect(selectIndex, optionIndex) {
+    await this.page.locator('select').nth(selectIndex).selectOption({ index: optionIndex });
+  }
+
+  // Moslashdan keyin "Далее" ni bosish (qo'lda rejim uchun alohida)
+  async submitMapping() {
     await this.page.click('text=Далее');
     await this.page.waitForSelector('table tr', { timeout: 30000 }).catch(() => {});
     await this.settle(400);
+  }
+
+  // ---- 3-qadam: tekshiruv jadvali ----
+  async preview() {
+    const rows = await this.page.locator('table tr').evaluateAll(trs =>
+      trs
+        .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))
+        .filter(c => c.length >= 4 && /^\d+$/.test(c[0]))
+        .map(c => ({ n: c[0], lesson: c[1], topic: c[2], hw: c[3], status: c.at(-1) }))
+    );
+
+    let diag = '';
+    if (!rows.length) {
+      diag = await this.page.evaluate(() => {
+        const txt = document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 600);
+        return `Sahifa matni:\n${txt}`;
+      }).catch(() => '');
+    }
+
+    const bad = rows.filter(r => !/Готов/i.test(r.status));
+    return { rows, ok: rows.length - bad.length, bad, diag, mapReport: this.lastMapReport || '' };
   }
 
   // ---- 4-qadam ----

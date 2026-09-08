@@ -239,38 +239,86 @@ bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   await askNext(ctx, id);
 });
 
-// ---------- tekshiruv ----------
+// ---------- ustun mosligi ----------
 async function showPreview(ctx, id) {
   const s = live.get(id);
   await ctx.reply('Ustunlar moslanyapti...');
 
+  let res;
   try {
-    await s.es.mapColumns();
+    res = await s.es.mapColumns();
   } catch (e) {
     await endSession(id);
-    return ctx.reply(`❌ ${e.message}`);
+    return ctx.reply(`\u274c ${e.message}`);
   }
+
+  if (res.done === res.need) return submitAndPreview(ctx, id);
+
+  // Avtomat qo'yilmadi — qo'lda so'raymiz
+  const sels = await s.es.mappingSelects();
+  if (!sels.length) {
+    await endSession(id);
+    return ctx.reply(`\u274c Ustun moslash jadvali topilmadi.\n\n${res.report}`);
+  }
+
+  s.manual = sels;
+  await ctx.reply("Ustunlarni qo'lda moslaymiz.");
+  return askMapping(ctx, id);
+}
+
+async function askMapping(ctx, id) {
+  const s = live.get(id);
+  s.es.touch();
+
+  const item = s.manual.shift();
+  if (!item) return submitAndPreview(ctx, id);
+
+  s.curMap = item;
+  const kb = new InlineKeyboard();
+  item.options.forEach((o, i) => kb.text(o.label, `m:${i}`).row());
+
+  await ctx.reply(`Fayldagi "${item.label}" ustuni nimaga to'g'ri keladi?`, { reply_markup: kb });
+}
+
+bot.callbackQuery(/^m:(\d+)$/, async ctx => {
+  const id = ctx.from.id;
+  const s = live.get(id);
+  if (!s?.curMap) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+
+  const opt = s.curMap.options[Number(ctx.match[1])];
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(`${s.curMap.label} \u2192 ${opt.label} \u2705`);
+
+  await s.es.setSelect(s.curMap.selectIndex, opt.index);
+  s.curMap = null;
+  await askMapping(ctx, id);
+});
+
+// ---------- tekshiruv ----------
+async function submitAndPreview(ctx, id) {
+  const s = live.get(id);
+  await s.es.submitMapping();
 
   const { rows, ok, bad, diag, mapReport } = await s.es.preview();
 
   if (!rows.length) {
     await endSession(id);
     return ctx.reply(
-      `❌ Tekshiruv jadvali topilmadi.\n\nUstun mosligi:\n${mapReport}\n\n${diag}`.slice(0, 3800)
+      `\u274c Tekshiruv jadvali topilmadi.\n\nUstun mosligi:\n${mapReport}\n\n${diag}`.slice(0, 3800)
     );
   }
 
   const list = rows.slice(0, 10)
-    .map(r => `${r.lesson}. ${r.topic}${r.hw ? ` — ${r.hw}` : ''}`).join('\n');
+    .map(r => `${r.lesson}. ${r.topic}${r.hw ? ` \u2014 ${r.hw}` : ''}`).join('\n');
 
   const head = Object.entries(s.picked).map(([k, v]) => `${k}: ${v}`).join('\n');
-  const warn = bad.length ? `\n\n⚠️ ${bad.length} ta qator tayyor emas.` : '';
+  const warn = bad.length ? `\n\n\u26a0\ufe0f ${bad.length} ta qator tayyor emas.` : '';
   const more = rows.length > 10 ? `\n... yana ${rows.length - 10} ta` : '';
 
   s.step = 'confirm';
   await ctx.reply(
     `${head}\n\nTopildi: ${rows.length} ta dars (${ok} tasi tayyor)${warn}\n\n${list}${more}\n\nYuklaymi?`,
-    { reply_markup: new InlineKeyboard().text('✅ Import', 'go').text('❌ Bekor', 'no') }
+    { reply_markup: new InlineKeyboard().text('\u2705 Import', 'go').text('\u274c Bekor', 'no') }
   );
 }
 
