@@ -5,18 +5,23 @@ const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : false,
 });
-const KEY = Buffer.from(process.env.ENC_KEY, 'hex'); // 32 bayt
+// Kalit birinchi ishlatilganda o'qiladi (import paytida emas)
+let _key;
+function KEY() {
+  if (!_key) _key = Buffer.from(process.env.ENC_KEY, 'hex');
+  return _key;
+}
 
 function enc(text) {
   const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', KEY, iv);
+  const c = crypto.createCipheriv('aes-256-gcm', KEY(), iv);
   const data = Buffer.concat([c.update(text, 'utf8'), c.final()]);
   return Buffer.concat([iv, c.getAuthTag(), data]).toString('base64');
 }
 
 function dec(b64) {
   const buf = Buffer.from(b64, 'base64');
-  const d = crypto.createDecipheriv('aes-256-gcm', KEY, buf.subarray(0, 12));
+  const d = crypto.createDecipheriv('aes-256-gcm', KEY(), buf.subarray(0, 12));
   d.setAuthTag(buf.subarray(12, 28));
   return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString('utf8');
 }
