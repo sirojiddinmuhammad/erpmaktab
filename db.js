@@ -70,11 +70,12 @@ export async function ensureSchema() {
 }
 
 // ---------- foydalanuvchi ----------
+// Yangi qo'shilganini bilish uchun xmax=0 tekshiriladi
 export async function ensureUser(tgId) {
   const { rows } = await pool.query(
     `insert into teachers (tg_id) values ($1)
      on conflict (tg_id) do update set tg_id = excluded.tg_id
-     returning *`,
+     returning *, (xmax = 0) as is_new`,
     [tgId]
   );
   return rows[0];
@@ -258,6 +259,43 @@ export async function rejectPayment(id) {
 
 export async function setName(tgId, fullName) {
   await pool.query('update teachers set full_name = $2 where tg_id = $1', [tgId, fullName]);
+}
+
+// ---------- hisobot ----------
+export async function stats() {
+  const q = async (sql) => (await pool.query(sql)).rows[0];
+
+  const users = await q(`
+    select
+      count(*)                                              as total,
+      count(*) filter (where password_enc is not null)      as linked,
+      count(*) filter (where imports_ok > 0)                as active,
+      count(*) filter (where created_at >= current_date)    as today,
+      count(*) filter (where sub_until >= current_date)     as subs,
+      coalesce(sum(balance), 0)                             as balances,
+      coalesce(sum(imports_ok), 0)                          as imports_total
+    from teachers
+  `);
+
+  const imp = await q(`
+    select
+      count(*) filter (where created_at >= current_date)              as today,
+      count(*) filter (where created_at >= current_date - 6)          as week
+    from ledger where reason = 'import'
+  `);
+
+  const pay = await q(`
+    select coalesce(sum(amount), 0) as total
+    from payments where status = 'approved'
+  `);
+
+  const { rows: top } = await pool.query(`
+    select coalesce(full_name, username, tg_id::text) as name, imports_ok
+      from teachers where imports_ok > 0
+     order by imports_ok desc limit 5
+  `);
+
+  return { users, imp, pay, top };
 }
 
 export async function ledgerRecent(tgId, n = 10) {

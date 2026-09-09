@@ -65,6 +65,16 @@ setInterval(() => {
     if (Date.now() - s.es.lastUsed > TIMEOUT) { s.es.close(); live.delete(id); }
 }, 60_000);
 
+async function notifyAdmin(text) {
+  if (!ADMIN_ID) return;
+  await bot.api.sendMessage(ADMIN_ID, text, { parse_mode: 'HTML' })
+    .catch(e => console.error('admin xabar:', e.message));
+}
+
+const who = from =>
+  `${from.username ? '@' + from.username : esc(from.first_name || '')} · ` +
+  `<a href="tg://user?id=${from.id}">${from.id}</a>`;
+
 async function endSession(id) {
   const s = live.get(id);
   if (s) {
@@ -99,6 +109,8 @@ async function sendChunks(ctx, lines, kb, plain) {
 bot.command('start', async ctx => {
   const id = ctx.from.id;
   const u = await db.ensureUser(id);
+
+  if (u.is_new) await notifyAdmin(`🆕 <b>Yangi foydalanuvchi</b>\n${who(ctx.from)}`);
   if (!u.lang) return askLang(ctx, 'uz');
 
   const lang = await L(id);
@@ -247,6 +259,11 @@ async function doLogin(ctx, id, lang, username, password) {
     await db.saveState(id, state);
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       fullName ? t(lang, 'connected', { name: fullName }) : t(lang, 'connected_no'));
+
+    await notifyAdmin(
+      `✅ <b>eMaktab ulandi</b>\n${esc(fullName || '—')}\n` +
+      `${who(ctx.from)}\nLogin: <code>${esc(username)}</code>`
+    );
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       e.message.startsWith('BAD_CREDENTIALS')
@@ -776,6 +793,35 @@ bot.callbackQuery('go', async ctx => {
   } finally {
     await endSession(id);
   }
+});
+
+// ---------- admin hisoboti ----------
+bot.command('stats', async ctx => {
+  if (ctx.from.id !== ADMIN_ID) return;
+  const { users, imp, pay, top } = await db.stats();
+
+  const topList = top.length
+    ? top.map((r, i) => `${i + 1}. ${esc(r.name)} — ${r.imports_ok} ta`).join('\n')
+    : '—';
+
+  await ctx.reply(
+    `📊 <b>Hisobot</b>\n\n` +
+    `👥 <b>Foydalanuvchilar</b>\n` +
+    `Jami: ${users.total}\n` +
+    `eMaktab ulangan: ${users.linked}\n` +
+    `Import qilgan: ${users.active}\n` +
+    `Bugun qo'shildi: ${users.today}\n\n` +
+    `📤 <b>Importlar</b>\n` +
+    `Bugun: ${imp.today}\n` +
+    `7 kunda: ${imp.week}\n` +
+    `Jami: ${users.imports_total}\n\n` +
+    `💰 <b>Pul</b>\n` +
+    `Balanslarda: ${money(users.balances)} so'm\n` +
+    `Jami to'lovlar: ${money(pay.total)} so'm\n` +
+    `Obunachilar: ${users.subs} ta\n\n` +
+    `🏆 <b>Eng faollar</b>\n${topList}`,
+    { parse_mode: 'HTML' }
+  );
 });
 
 // ---------- qo'llanma (Telegram Mini App) ----------
