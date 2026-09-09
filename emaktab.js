@@ -302,6 +302,17 @@ export class EmaktabSession {
     return { done: plan.actions.length, need: Object.keys(COLUMN_MAP).length, report: this.lastMapReport };
   }
 
+  // Oldin tanlangan parametrlarni qayta qo'yadi (qayta yuklashdan keyin)
+  async applyParams(list) {
+    for (const { label, optionLabel } of list) {
+      const opts = await this.options(label);
+      const hit = opts.find(o => o.label === optionLabel)
+               || opts.find(o => o.label.includes(optionLabel));
+      if (!hit) throw new Error(`"${optionLabel}" varianti qayta topilmadi (${label}).`);
+      await this.pick(label, hit.index);
+    }
+  }
+
   // Qo'lda moslash uchun: moslash selectlari va ularning variantlari
   async mappingSelects() {
     await this.page.waitForFunction(() =>
