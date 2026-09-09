@@ -14,6 +14,8 @@ import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 
 const bot = new Bot(process.env.BOT_TOKEN);
 const TMP = '/tmp/emaktab';
@@ -764,6 +766,36 @@ bot.callbackQuery('go', async ctx => {
     await endSession(id);
   }
 });
+
+// ---------- qo'llanma (Telegram Mini App) ----------
+// Railway PORT bersa, guide.html shu manzilda ochiladi.
+if (process.env.PORT) {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const file = path.join(dir, 'guide.html');
+
+  http.createServer(async (req, res) => {
+    const url = (req.url || '/').split('?')[0];
+
+    if (url === '/health') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      return res.end('ok');
+    }
+
+    try {
+      const html = await fs.readFile(file, 'utf8');
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'public, max-age=300',
+      });
+      res.end(html);
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end("guide.html topilmadi");
+    }
+  }).listen(process.env.PORT, () => {
+    console.log(`Qo'llanma serveri: port ${process.env.PORT}`);
+  });
+}
 
 bot.catch(err => console.error('bot error', err));
 

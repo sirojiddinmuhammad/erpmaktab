@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Qo‘llanma</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #f2f3f5);
+    --text: var(--tg-theme-text-color, #000000);
+    --hint: var(--tg-theme-hint-color, #707579);
+    --accent: var(--tg-theme-button-color, #2481cc);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: rgba(0,0,0,.10);
+    --code-bg: rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg: var(--tg-theme-bg-color, #17212b);
+      --card: var(--tg-theme-secondary-bg-color, #232e3c);
+      --text: var(--tg-theme-text-color, #ffffff);
+      --hint: var(--tg-theme-hint-color, #8b9398);
+      --line: rgba(255,255,255,.12);
+      --code-bg: rgba(255,255,255,.10);
+    }
+  }
+  html[data-scheme="dark"]{
+    --line: rgba(255,255,255,.12);
+    --code-bg: rgba(255,255,255,.10);
+  }
+  html[data-scheme="light"]{
+    --line: rgba(0,0,0,.10);
+    --code-bg: rgba(0,0,0,.06);
+  }
+
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 16px 16px calc(24px + env(safe-area-inset-bottom));
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  h1{ font-size: 22px; line-height:1.3; margin: 4px 0 4px; }
+  .lead{ color: var(--hint); font-size: 16px; margin: 0 0 16px; }
+
+  /* Til almashtirgich */
+  .lang{
+    display: flex;
+    gap: 6px;
+    background: var(--card);
+    border-radius: 12px;
+    padding: 6px;
+    margin-bottom: 18px;
+  }
+  .lang button{
+    flex: 1;
+    min-height: 44px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text);
+    font-size: 16px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .lang button[aria-pressed="true"]{
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  /* Bo‘limlar */
+  .card{
+    background: var(--card);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .head{
+    width: 100%;
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: left;
+    cursor: pointer;
+  }
+  .head .emoji{ font-size: 20px; flex: none; }
+  .head .title{ flex: 1; }
+  .chev{
+    flex: none;
+    width: 12px; height: 12px;
+    border-right: 2px solid var(--hint);
+    border-bottom: 2px solid var(--hint);
+    transform: rotate(45deg);
+    margin-right: 4px;
+    transition: transform .18s ease;
+  }
+  .head[aria-expanded="true"] .chev{ transform: rotate(-135deg); }
+
+  .body{ padding: 0 14px 14px; }
+  .body p{ margin: 0 0 10px; }
+  .body p:last-child{ margin-bottom: 0; }
+
+  .step{
+    display: flex;
+    gap: 10px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .num{
+    flex: none;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 14px;
+    font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step .txt{ flex: 1; }
+
+  ul.plain{ margin: 0 0 10px; padding-left: 20px; }
+  ul.plain li{ margin-bottom: 6px; }
+
+  .note{
+    border-left: 3px solid var(--accent);
+    padding: 8px 0 8px 12px;
+    color: var(--hint);
+    margin: 10px 0 0;
+  }
+
+  .sample{
+    display: block;
+    background: var(--code-bg);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 16px;
+  }
+  code{
+    background: var(--code-bg);
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 15px;
+  }
+
+  .qa{ margin-bottom: 12px; }
+  .qa:last-child{ margin-bottom: 0; }
+  .qa .q{ font-weight: 600; margin: 0 0 2px; }
+  .qa .a{ margin: 0; color: var(--hint); }
+
+  a.contact{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    border-radius: 10px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 10px;
+  }
+
+  #done{
+    width: 100%;
+    min-height: 50px;
+    margin-top: 18px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-family: inherit;
+    font-size: 17px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #done:active{ opacity: .85; }
+
+  button:focus-visible, a:focus-visible{
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce){
+    .chev{ transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="lang" role="group" id="lang">
+  <button type="button" data-lang="uz" aria-pressed="true">O‘zbekcha</button>
+  <button type="button" data-lang="ru" aria-pressed="false">Русский</button>
+</div>
+
+<h1 id="pageTitle"></h1>
+<p class="lead" id="pageLead"></p>
+
+<div id="sections"></div>
+
+<button type="button" id="done"></button>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    if (tg.colorScheme) {
+      document.documentElement.setAttribute('data-scheme', tg.colorScheme);
+    }
+    if (tg.onEvent) {
+      tg.onEvent('themeChanged', function () {
+        document.documentElement.setAttribute('data-scheme', tg.colorScheme);
+      });
+    }
+  }
+
+  var CONTACT = 'Yordambek_BOT'; // aloqa uchun username
+
+  var DATA = {
+    uz: {
+      title: 'Bot qo‘llanmasi',
+      lead: 'eMaktab jurnaliga dars mavzularini yuklash bo‘yicha qisqa yo‘riqnoma.',
+      done: 'Tushunarli',
+      sections: [
+        {
+          emoji: '📘',
+          title: 'Bot nima qiladi',
+          blocks: [
+            { type: 'p', text: 'Excel fayldagi dars mavzularini eMaktab jurnaliga o‘zi kiritadi. Siz faylni yuborasiz, qolganini bot bajaradi.' },
+            { type: 'p', text: 'Bir chorakning mavzularini kiritish 1 daqiqa vaqt oladi.' }
+          ]
+        },
+        {
+          emoji: '🚀',
+          title: 'Boshlash',
+          blocks: [
+            { type: 'steps', items: [
+              '«🌐 Til» dan tilni tanlang.',
+              '«👤 Profil» → «🔑 eMaktab hisobi» ni bosing.',
+              'eMaktab loginingizni yuboring, keyin parolni.'
+            ]},
+            { type: 'note', text: 'Parol xabari darhol o‘chiriladi va shifrlangan holda saqlanadi.' }
+          ]
+        },
+        {
+          emoji: '📤',
+          title: 'Mavzularni yuklash',
+          blocks: [
+            { type: 'steps', items: [
+              '«📤 Import» ni bosing.',
+              'Excel faylni yuboring ([[.xlsx]]).',
+              'Sinf va fanni tanlang. Fayl nomida ma’lumot bo‘lsa, bot ro‘yxatni o‘zi qisqartiradi. To‘liq ro‘yxat kerak bo‘lsa «🔍 Hammasi» ni bosing.',
+              'Mavzular ro‘yxatini o‘qib chiqing.',
+              '«✅ Import» ni bosing. Natija skrinshoti keladi.'
+            ]},
+            { type: 'note', text: 'Xato tanlasangiz «⬅️ Orqaga» bilan qaytishingiz mumkin.' }
+          ]
+        },
+        {
+          emoji: '🔗',
+          title: 'Mavzularni birlashtirish',
+          blocks: [
+            { type: 'p', text: 'Ba’zan faylda mavzu ko‘p, jurnalda dars kuni kam bo‘ladi. Ortiqcha mavzular kirmaydi.' },
+            { type: 'p', text: 'Ikki mavzuni bitta darsga qo‘shish uchun «🔗 Birlashtirish» ni bosing va yonma-yon raqamlarni yozing:' },
+            { type: 'sample', text: '3-4, 8-9' },
+            { type: 'p', text: 'Mavzular nuqta bilan, uy vazifalari vergul bilan qo‘shiladi.' },
+            { type: 'p', text: 'Faqat yonma-yon turgan mavzular birlashadi.' }
+          ]
+        },
+        {
+          emoji: '⚠️',
+          title: 'Sariq belgi nimani bildiradi',
+          blocks: [
+            { type: 'p', text: 'O‘sha mavzuga jurnalda dars kuni topilmagan.' },
+            { type: 'p', text: '«✅ Import» bosilsa u qator kiritilmaydi, qolganlari kiritiladi.' },
+            { type: 'note', text: 'Yechimi: mavzularni birlashtiring yoki jurnaldagi dars kunlarini tekshiring.' }
+          ]
+        },
+        {
+          emoji: '💳',
+          title: 'Narxlar',
+          blocks: [
+            { type: 'list', items: [
+              'Birinchi 3 ta import — bepul.',
+              'Keyin har bir import — 2 000 so‘m.',
+              'Yillik obuna — 50 000 so‘m, yil davomida cheksiz import.'
+            ]},
+            { type: 'p', text: 'Balansni to‘ldirish:' },
+            { type: 'steps', items: [
+              '«💳 Balans» → «➕ To‘ldirish» ni bosing.',
+              'Summani yozing.',
+              'Chek skrinshotini yuboring. Tasdiqlangach balans to‘ladi.'
+            ]},
+            { type: 'note', text: 'Pul faqat muvaffaqiyatli importdan keyin yechiladi. Xato bo‘lsa yoki bekor qilsangiz — yechilmaydi.' }
+          ]
+        },
+        {
+          emoji: '❓',
+          title: 'Savollar',
+          blocks: [
+            { type: 'qa', items: [
+              { q: 'Parolim xavfsizmi?', a: 'Shifrlangan holda saqlanadi, xabaringiz darhol o‘chiriladi.' },
+              { q: '[[.xls]] fayl ishlaydimi?', a: 'Import ishlaydi, lekin birlashtirish faqat [[.xlsx]] uchun.' },
+              { q: 'Import yarmida to‘xtab qolsa?', a: 'Pul yechilmaydi, qaytadan urinib ko‘ring.' },
+              { q: 'Bir vaqtda nechta fan yuklasa bo‘ladi?', a: 'Bittadan. Har fan va chorak uchun alohida import.' }
+            ]}
+          ]
+        },
+        {
+          emoji: '📞',
+          title: 'Aloqa',
+          blocks: [
+            { type: 'p', text: 'Savol yoki muammo bo‘lsa yozing:' },
+            { type: 'contact', text: '@' + CONTACT }
+          ]
+        }
+      ]
+    },
+
+    ru: {
+      title: 'Руководство по боту',
+      lead: 'Короткая инструкция по загрузке тем уроков в журнал eMaktab.',
+      done: 'Понятно',
+      sections: [
+        {
+          emoji: '📘',
+          title: 'Что делает бот',
+          blocks: [
+            { type: 'p', text: 'Он сам вносит темы уроков из Excel-файла в журнал eMaktab. Вы отправляете файл — остальное делает бот.' },
+            { type: 'p', text: 'Внесение тем за одну четверть занимает 1 минуту.' }
+          ]
+        },
+        {
+          emoji: '🚀',
+          title: 'Начало работы',
+          blocks: [
+            { type: 'steps', items: [
+              'Выберите язык в «🌐 Язык».',
+              'Нажмите «👤 Профиль» → «🔑 Аккаунт eMaktab».',
+              'Отправьте логин eMaktab, затем пароль.'
+            ]},
+            { type: 'note', text: 'Сообщение с паролем сразу удаляется, сам пароль хранится в зашифрованном виде.' }
+          ]
+        },
+        {
+          emoji: '📤',
+          title: 'Загрузка тем',
+          blocks: [
+            { type: 'steps', items: [
+              'Нажмите «📤 Импорт».',
+              'Отправьте файл Excel ([[.xlsx]]).',
+              'Выберите класс и предмет. Если в названии файла есть данные, бот сам сократит список. Если нужен полный список — нажмите «🔍 Все».',
+              'Просмотрите список тем.',
+              'Нажмите «✅ Импорт». Придёт скриншот результата.'
+            ]},
+            { type: 'note', text: 'Если выбрали не то, можно вернуться кнопкой «⬅️ Назад».' }
+          ]
+        },
+        {
+          emoji: '🔗',
+          title: 'Объединение тем',
+          blocks: [
+            { type: 'p', text: 'Иногда в файле тем больше, чем дней уроков в журнале. Лишние темы не помещаются.' },
+            { type: 'p', text: 'Чтобы объединить две темы в один урок, нажмите «🔗 Объединить» и напишите соседние номера:' },
+            { type: 'sample', text: '3-4, 8-9' },
+            { type: 'p', text: 'Темы соединяются точкой, домашние задания — запятой.' },
+            { type: 'p', text: 'Объединяются только соседние темы.' }
+          ]
+        },
+        {
+          emoji: '⚠️',
+          title: 'Что означает жёлтый значок',
+          blocks: [
+            { type: 'p', text: 'Для этой темы в журнале не найден день урока.' },
+            { type: 'p', text: 'При нажатии «✅ Импорт» эта строка не будет внесена, остальные внесутся.' },
+            { type: 'note', text: 'Решение: объедините темы или проверьте дни уроков в журнале.' }
+          ]
+        },
+        {
+          emoji: '💳',
+          title: 'Цены',
+          blocks: [
+            { type: 'list', items: [
+              'Первые 3 импорта — бесплатно.',
+              'Далее каждый импорт — 2 000 сум.',
+              'Годовая подписка — 50 000 сум, безлимитный импорт в течение года.'
+            ]},
+            { type: 'p', text: 'Пополнение баланса:' },
+            { type: 'steps', items: [
+              'Нажмите «💳 Баланс» → «➕ Пополнить».',
+              'Напишите сумму.',
+              'Отправьте скриншот чека. После подтверждения баланс пополнится.'
+            ]},
+            { type: 'note', text: 'Деньги списываются только после успешного импорта. При ошибке или отмене — не списываются.' }
+          ]
+        },
+        {
+          emoji: '❓',
+          title: 'Вопросы',
+          blocks: [
+            { type: 'qa', items: [
+              { q: 'Мой пароль в безопасности?', a: 'Он хранится в зашифрованном виде, ваше сообщение сразу удаляется.' },
+              { q: 'Работает ли файл [[.xls]]?', a: 'Импорт работает, но объединение — только для [[.xlsx]].' },
+              { q: 'Что если импорт прервался на середине?', a: 'Деньги не списываются, попробуйте ещё раз.' },
+              { q: 'Сколько предметов можно загрузить сразу?', a: 'По одному. Для каждого предмета и четверти — отдельный импорт.' }
+            ]}
+          ]
+        },
+        {
+          emoji: '📞',
+          title: 'Связь',
+          blocks: [
+            { type: 'p', text: 'Если есть вопрос или проблема, напишите:' },
+            { type: 'contact', text: '@' + CONTACT }
+          ]
+        }
+      ]
+    }
+  };
+
+  var sectionsEl = document.getElementById('sections');
+  var titleEl = document.getElementById('pageTitle');
+  var leadEl = document.getElementById('pageLead');
+  var doneEl = document.getElementById('done');
+  var langEl = document.getElementById('lang');
+
+  var openState = [true]; // birinchi bo‘lim ochiq
+  var currentLang = 'uz';
+
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+  // [[matn]] -> <code>matn</code>
+  function fmt(s) {
+    return esc(s).replace(/\[\[(.+?)\]\]/g, '<code>$1</code>');
+  }
+
+  function blockHTML(b) {
+    var i, out;
+    if (b.type === 'p') {
+      return '<p>' + fmt(b.text) + '</p>';
+    }
+    if (b.type === 'note') {
+      return '<p class="note">' + fmt(b.text) + '</p>';
+    }
+    if (b.type === 'sample') {
+      return '<span class="sample">' + esc(b.text) + '</span>';
+    }
+    if (b.type === 'steps') {
+      out = '';
+      for (i = 0; i < b.items.length; i++) {
+        out += '<div class="step"><span class="num">' + (i + 1) + '</span>' +
+               '<span class="txt">' + fmt(b.items[i]) + '</span></div>';
+      }
+      return out;
+    }
+    if (b.type === 'list') {
+      out = '<ul class="plain">';
+      for (i = 0; i < b.items.length; i++) {
+        out += '<li>' + fmt(b.items[i]) + '</li>';
+      }
+      return out + '</ul>';
+    }
+    if (b.type === 'qa') {
+      out = '';
+      for (i = 0; i < b.items.length; i++) {
+        out += '<div class="qa"><p class="q">' + fmt(b.items[i].q) + '</p>' +
+               '<p class="a">' + fmt(b.items[i].a) + '</p></div>';
+      }
+      return out;
+    }
+    if (b.type === 'contact') {
+      return '<a class="contact" href="https://t.me/' + encodeURIComponent(CONTACT) + '" target="_blank" rel="noopener">' +
+             esc(b.text) + '</a>';
+    }
+    return '';
+  }
+
+  function render() {
+    var d = DATA[currentLang];
+    document.documentElement.lang = currentLang;
+    titleEl.textContent = d.title;
+    leadEl.textContent = d.lead;
+    doneEl.textContent = d.done;
+    document.title = d.title;
+
+    var html = '';
+    for (var i = 0; i < d.sections.length; i++) {
+      var s = d.sections[i];
+      var open = openState[i] === true;
+      var body = '';
+      for (var j = 0; j < s.blocks.length; j++) {
+        body += blockHTML(s.blocks[j]);
+      }
+      html +=
+        '<div class="card">' +
+          '<button type="button" class="head" data-index="' + i + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="sec' + i + '">' +
+            '<span class="emoji" aria-hidden="true">' + s.emoji + '</span>' +
+            '<span class="title">' + esc(s.title) + '</span>' +
+            '<span class="chev" aria-hidden="true"></span>' +
+          '</button>' +
+          '<div class="body" id="sec' + i + '"' + (open ? '' : ' hidden') + '>' + body + '</div>' +
+        '</div>';
+    }
+    sectionsEl.innerHTML = html;
+  }
+
+  sectionsEl.addEventListener('click', function (e) {
+    var head = e.target.closest ? e.target.closest('.head') : null;
+    if (!head) return;
+    var idx = Number(head.getAttribute('data-index'));
+    var body = document.getElementById('sec' + idx);
+    var isOpen = head.getAttribute('aria-expanded') === 'true';
+    head.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    body.hidden = isOpen;
+    openState[idx] = !isOpen;
+    if (tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged) {
+      tg.HapticFeedback.selectionChanged();
+    }
+  });
+
+  langEl.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('button[data-lang]') : null;
+    if (!btn) return;
+    var lang = btn.getAttribute('data-lang');
+    if (lang === currentLang) return;
+    currentLang = lang;
+    var buttons = langEl.querySelectorAll('button[data-lang]');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute('aria-pressed', buttons[i].getAttribute('data-lang') === lang ? 'true' : 'false');
+    }
+    render();
+  });
+
+  doneEl.addEventListener('click', function () {
+    if (tg && tg.close) {
+      tg.close();
+    }
+  });
+
+  // Boshlang‘ich til
+  (function initLang() {
+    var code = '';
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.language_code) {
+      code = String(tg.initDataUnsafe.user.language_code).toLowerCase();
+    }
+    currentLang = code.indexOf('ru') === 0 ? 'ru' : 'uz';
+    var buttons = langEl.querySelectorAll('button[data-lang]');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].setAttribute('aria-pressed', buttons[i].getAttribute('data-lang') === currentLang ? 'true' : 'false');
+    }
+  })();
+
+  render();
+})();
+</script>
+</body>
+</html>
