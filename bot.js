@@ -176,12 +176,13 @@ async function showBalance(ctx, id, lang) {
 }
 
 // ---------- matnli xabarlar ----------
-bot.on('message:text', async ctx => {
+bot.on('message:text', async (ctx, next) => {
   const id = ctx.from.id;
   const text = ctx.message.text;
   const lang = await L(id);
 
-  if (text.startsWith('/')) return;
+  // Buyruqlarni keyingi ishlovchilarga o'tkazamiz
+  if (text.startsWith('/')) return next();
 
   // tugmalar
   const act = BTN[text];
