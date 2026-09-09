@@ -391,9 +391,13 @@ async function submitAndPreview(ctx, id) {
     return ctx.reply(`❌ Tekshiruv jadvali topilmadi.\n\n${mapReport}\n\n${diag}`.slice(0, 3800));
   }
 
-  s.siteRows = rows;
-  s.ok = ok;
-  s.bad = bad;
+  // Himoya: eski emaktab.js "ok" bermasa, holat matnidan aniqlaymiz
+  s.siteRows = rows.map(r => ({
+    ...r,
+    ok: typeof r.ok === 'boolean' ? r.ok : /Готов|Tayyor/i.test(r.status || ''),
+  }));
+  s.bad = s.siteRows.filter(r => !r.ok);
+  s.ok = s.siteRows.length - s.bad.length;
   s.step = 'confirm';
 
   await renderPreview(ctx, id, false);

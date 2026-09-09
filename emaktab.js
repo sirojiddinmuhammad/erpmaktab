@@ -355,22 +355,80 @@ export class EmaktabSession {
 
   // ---- 3-qadam: tekshiruv jadvali ----
   async preview() {
-    const rows = await this.page.locator('table tr').evaluateAll(trs =>
-      trs
-        .map(tr => [...tr.querySelectorAll('td')].map(td => td.innerText.trim()))
-        .filter(c => c.length >= 4 && /^\d+$/.test(c[0]))
-        .map(c => ({ n: c[0], lesson: c[1], topic: c[2], hw: c[3], status: c.at(-1) }))
-    );
+    const data = await this.page.evaluate(() => {
+      const norm = t => (t || '').replace(/\s+/g, ' ').trim();
 
+      // Kerakli jadval: sarlavhasida "Тема урока" bo'lgani
+      const table = [...document.querySelectorAll('table')]
+        .find(t => /Тема\s*урока/i.test(t.textContent));
+      if (!table) return { rows: [] };
+
+      const trs = [...table.querySelectorAll('tr')];
+
+      // Sarlavha qatoridan ustun raqamlarini aniqlaymiz
+      let col = null;
+      for (const tr of trs) {
+        const cells = [...tr.querySelectorAll('th, td')].map(c => norm(c.textContent));
+        if (cells.some(c => /Тема\s*урока/i.test(c))) {
+          col = {
+            lesson: cells.findIndex(c => /№\s*урока/i.test(c)),
+            topic:  cells.findIndex(c => /Тема\s*урока/i.test(c)),
+            hw:     cells.findIndex(c => /Домашнее\s*задание/i.test(c)),
+          };
+          break;
+        }
+      }
+      if (!col || col.topic === -1) return { rows: [] };
+
+      const rows = [];
+      for (const tr of trs) {
+        const tds = [...tr.querySelectorAll('td')];
+        if (!tds.length) continue;
+
+        const cells = tds.map(c => norm(c.innerText));
+        if (!/^\d+$/.test(cells[0])) continue; // sarlavha yoki bo'sh qator
+
+        // Holatni butun qator matnidan aniqlaymiz — ustun siljisa ham ishlaydi
+        const rowText = norm(tr.innerText);
+        const isError = /Ошибка|Xato/i.test(rowText);
+        const isOk = /Готов/i.test(rowText);
+
+        // Xato qatorda kataklar siljishi mumkin: mavzuni "Ошибка" so'zidan tozalaymiz
+        const pick = i => (i >= 0 && i < cells.length ? cells[i] : '');
+        let topic = pick(col.topic);
+        let hw = pick(col.hw);
+        let lesson = pick(col.lesson);
+
+        if (isError) {
+          // Siljish bo'lsa: "Ошибка!" turgan katakni tashlab, keyingilarini olamiz
+          const ei = cells.findIndex(c => /^Ошибка/i.test(c));
+          if (ei !== -1 && ei <= col.topic) {
+            topic = norm(pick(col.topic).replace(/^Ошибка!?\.?/i, '')) || pick(col.topic + 1);
+            if (/^Ошибка/i.test(lesson) || !/^\d+$/.test(lesson)) lesson = '';
+          }
+        }
+
+        rows.push({
+          n: cells[0],
+          lesson: /^\d+$/.test(lesson) ? lesson : cells[0],
+          topic,
+          hw,
+          ok: isOk && !isError,
+          status: isError ? 'Xato' : (isOk ? 'Tayyor' : 'Nomalum'),
+        });
+      }
+      return { rows };
+    });
+
+    const rows = data.rows || [];
     let diag = '';
     if (!rows.length) {
-      diag = await this.page.evaluate(() => {
-        const txt = document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 600);
-        return `Sahifa matni:\n${txt}`;
-      }).catch(() => '');
+      diag = await this.page.evaluate(() =>
+        `Sahifa matni:\n${document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 600)}`
+      ).catch(() => '');
     }
 
-    const bad = rows.filter(r => !/Готов/i.test(r.status));
+    const bad = rows.filter(r => !r.ok);
     return { rows, ok: rows.length - bad.length, bad, diag, mapReport: this.lastMapReport || '' };
   }
 
