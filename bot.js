@@ -25,6 +25,7 @@ const CHUNK = 3500;
 const ADMIN_ID = Number(process.env.ADMIN_ID || 0);
 const CARD = process.env.CARD_NUMBER || '0000 0000 0000 0000';
 const CARD_HOLDER = process.env.CARD_HOLDER || '';
+const GUIDE_URL = process.env.GUIDE_URL || '';
 
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -44,7 +45,7 @@ function mainKb(lang) {
   return new Keyboard()
     .text(t(lang, 'btn_import')).row()
     .text(t(lang, 'btn_profile')).text(t(lang, 'btn_balance')).row()
-    .text(t(lang, 'btn_lang')).text(t(lang, 'btn_cancel'))
+    .text(t(lang, 'btn_lang')).text(t(lang, 'btn_guide'))
     .resized().persistent();
 }
 
@@ -56,6 +57,7 @@ for (const lg of LANGS) {
   BTN[t(lg, 'btn_balance')] = 'balance';
   BTN[t(lg, 'btn_lang')]    = 'lang';
   BTN[t(lg, 'btn_cancel')]  = 'cancel';
+  BTN[t(lg, 'btn_guide')]   = 'guide';
 }
 
 setInterval(() => {
@@ -175,6 +177,13 @@ bot.on('message:text', async ctx => {
   if (act === 'profile') return showProfile(ctx, id, lang);
   if (act === 'balance') return showBalance(ctx, id, lang);
   if (act === 'lang')    return askLang(ctx, lang);
+  if (act === 'guide') {
+    if (!GUIDE_URL) return ctx.reply(t(lang, 'guide_none'));
+    return ctx.reply(t(lang, 'guide_msg'), {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard().webApp(t(lang, 'btn_open'), GUIDE_URL),
+    });
+  }
   if (act === 'cancel') {
     flow.delete(id);
     await endSession(id);
@@ -483,6 +492,7 @@ async function askNext(ctx, id, lang) {
   kb.row();
   if (filtered) kb.text(t(lang, 'btn_all'), 'all');
   if (s.asked.length) kb.text(t(lang, 'btn_back'), 'back');
+  kb.text(t(lang, 'btn_cancel'), 'no');
 
   const done = s.answers.map(a => `<i>${esc(a.optionLabel)}</i>`).join(' · ');
   await ctx.reply(
@@ -567,6 +577,7 @@ async function askMapping(ctx, id, lang) {
   s.curMap = item;
   const kb = new InlineKeyboard();
   item.options.forEach((o, i) => kb.text(o.label, `m:${i}`).row());
+  kb.text(t(lang, 'btn_cancel'), 'no');
   await ctx.reply(t(lang, 'map_q', { col: esc(item.label) }), { parse_mode: 'HTML', reply_markup: kb });
 }
 

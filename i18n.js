@@ -5,6 +5,8 @@ const S = {
   btn_balance:  { uz: '💳 Balans',        ru: '💳 Баланс' },
   btn_lang:     { uz: '🌐 Til',           ru: '🌐 Язык' },
   btn_cancel:   { uz: '❌ Bekor',         ru: '❌ Отмена' },
+  btn_guide:    { uz: "📖 Qo'llanma",     ru: '📖 Инструкция' },
+  btn_open:     { uz: "📖 Qo'llanmani ochish", ru: '📖 Открыть инструкцию' },
   btn_all:      { uz: '🔍 Hammasi',       ru: '🔍 Все' },
   btn_back:     { uz: '⬅️ Orqaga',        ru: '⬅️ Назад' },
   btn_ok:       { uz: '✅ Import',        ru: '✅ Импорт' },
@@ -30,8 +32,20 @@ const S = {
     ru: 'Здравствуйте, {name}! Нажмите "📤 Импорт" для загрузки.',
   },
   start_anon: {
-    uz: 'Salom! Boshlash uchun "👤 Profil" dan eMaktab hisobingizni ulang.',
-    ru: 'Здравствуйте! Подключите аккаунт eMaktab в разделе "👤 Профиль".',
+    uz: 'Salom! Dars mavzularini eMaktabga yuklaydigan bot.\n\n' +
+        'Boshlash uchun "👤 Profil" dan eMaktab hisobingizni ulang.\n\n' +
+        '"📖 Qo\'llanma" bilan tanishib chiqing — 1 daqiqa vaqt oladi.',
+    ru: 'Здравствуйте! Бот для загрузки тем уроков в eMaktab.\n\n' +
+        'Для начала подключите аккаунт eMaktab в разделе "👤 Профиль".\n\n' +
+        'Ознакомьтесь с "📖 Инструкция" — это займёт 1 минуту.',
+  },
+  guide_msg: {
+    uz: '📖 <b>Qo\'llanma</b>\n\nBotdan foydalanish bo\'yicha qisqa yo\'riqnoma.',
+    ru: '📖 <b>Инструкция</b>\n\nКраткое руководство по работе с ботом.',
+  },
+  guide_none: {
+    uz: "Qo'llanma hozircha mavjud emas.",
+    ru: 'Инструкция пока недоступна.',
   },
   lang_choose: { uz: 'Tilni tanlang:', ru: 'Выберите язык:' },
   lang_set:    { uz: "Til o'zbekchaga o'zgartirildi.", ru: 'Язык изменён на русский.' },
