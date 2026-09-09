@@ -22,6 +22,7 @@ try {
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { EmaktabSession } from './emaktab.js';
 import { readRows, writeRows, parsePairs, applyMerges } from './xlsx.js';
+import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
 import { getCreds, setCreds, saveState, getState, getName, ensureSchema } from './db.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -30,6 +31,9 @@ const bot = new Bot(process.env.BOT_TOKEN);
 const TMP = '/tmp/emaktab';
 const TIMEOUT = 15 * 60 * 1000;
 const CHUNK = 3500;
+
+const esc = t => String(t ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const live = new Map();     // userId -> sessiya
 const pending = new Map();  // userId -> login bosqichi
@@ -64,24 +68,29 @@ async function endSession(id) {
 }
 
 // Uzun ro'yxatni bo'lib yuborish, tugmalar oxirgi xabarda
-async function sendChunks(ctx, lines, kb) {
+async function sendChunks(ctx, lines, kb, plainLines) {
   const parts = [];
   let buf = '';
   for (const l of lines) {
-    if ((buf + l + '\n').length > CHUNK) { parts.push(buf); buf = ''; }
+    if ((buf + l + '\n').length > CHUNK) { parts.push(buf.trimEnd()); buf = ''; }
     buf += l + '\n';
   }
-  if (buf) parts.push(buf);
+  if (buf.trim()) parts.push(buf.trimEnd());
 
   if (parts.length > 10) {
     await ctx.replyWithDocument(
-      new InputFile(Buffer.from(lines.join('\n'), 'utf8'), 'mavzular.txt'),
+      new InputFile(Buffer.from((plainLines || lines).join('\n'), 'utf8'), 'mavzular.txt'),
       { caption: "Ro'yxat juda uzun — fayl qilib yubordim.", reply_markup: kb }
     );
     return;
   }
+
   for (let i = 0; i < parts.length; i++) {
-    await ctx.reply(parts[i], i === parts.length - 1 ? { reply_markup: kb } : {});
+    const last = i === parts.length - 1;
+    await ctx.reply(parts[i], {
+      parse_mode: 'HTML',
+      ...(last ? { reply_markup: kb } : {}),
+    });
   }
 }
 
@@ -185,6 +194,7 @@ bot.on('message:document', async ctx => {
     const local = path.join(TMP, `${id}_${Date.now()}${path.extname(doc.file_name)}`);
     await fs.writeFile(local, Buffer.from(await (await fetch(url)).arrayBuffer()));
     s.filePath = local;
+    s.hints = parseFileName(doc.file_name);
 
     // Eski .xls formatini o'qiy olmaymiz — birlashtirish faqat .xlsx uchun
     s.canMerge = /\.xlsx$/i.test(doc.file_name);
@@ -231,18 +241,26 @@ async function askNext(ctx, id) {
   const field = s.fields.shift();
   if (!field) return startMapping(ctx, id);
 
-  const opts = await s.es.options(field.label);
-  if (!opts.length) {
+  const all = await s.es.options(field.label);
+  if (!all.length) {
     const info = await s.es.debugSelect(field.label);
     await endSession(id);
     return ctx.reply(`❌ "${field.ask}" ro'yxati bo'sh chiqdi.\n\n${info}`);
   }
 
-  // Bitta variant bo'lsa so'ramaymiz
-  if (opts.length === 1) {
+  // Fayl nomidagi ishoralar bo'yicha filtr
+  const showAll = s.showAllFor === field.label;
+  const hit = showAll ? [] : filterOptions(field.label, all, s.hints);
+  const opts = hit.length ? hit : all;
+  const filtered = opts.length < all.length;
+
+  // Avtomat qo'yish: yagona variant bo'lsa, yoki yil/chorak fayldan aniq bo'lsa
+  const auto = all.length === 1 || (filtered && opts.length === 1 && AUTO_FIELDS.has(field.label));
+  if (auto) {
     await s.es.pick(field.label, opts[0].index);
     s.asked.push(field);
     s.answers.push({ label: field.label, ask: field.ask, optionLabel: opts[0].label });
+    s.showAllFor = null;
     return askNext(ctx, id);
   }
 
@@ -254,10 +272,31 @@ async function askNext(ctx, id) {
     kb.text(o.label, `p:${i}`);
     if (i % 3 === 2) kb.row();
   });
-  if (s.asked.length) kb.row().text('⬅️ Orqaga', 'back');
+  kb.row();
+  if (filtered) kb.text('🔍 Hammasi', 'all');
+  if (s.asked.length) kb.text('⬅️ Orqaga', 'back');
 
-  await ctx.reply(`${field.ask}ni tanlang:`, { reply_markup: kb });
+  const done = s.answers.map(a => `<i>${esc(a.optionLabel)}</i>`).join(' · ');
+  const note = filtered ? ` <i>(fayl bo'yicha)</i>` : '';
+  await ctx.reply(
+    (done ? `${done}\n\n` : '') + `<b>${esc(field.ask)}</b>ni tanlang:${note}`,
+    { parse_mode: 'HTML', reply_markup: kb }
+  );
 }
+
+bot.callbackQuery('all', async ctx => {
+  const id = ctx.from.id;
+  const s = live.get(id);
+  if (!s?.current) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText("To'liq ro'yxat:");
+
+  s.showAllFor = s.current.label;
+  s.fields.unshift(s.current);
+  s.current = null;
+  await askNext(ctx, id);
+});
 
 bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   const id = ctx.from.id;
@@ -271,6 +310,7 @@ bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   await s.es.pick(s.current.label, opt.index);
   s.asked.push(s.current);
   s.answers.push({ label: s.current.label, ask: s.current.ask, optionLabel: opt.label });
+  s.showAllFor = null;
   s.current = null;
 
   await askNext(ctx, id);
@@ -287,6 +327,7 @@ bot.callbackQuery('back', async ctx => {
   s.fields.unshift(s.current);        // hozirgi savol navbatga qaytadi
   s.fields.unshift(s.asked.pop());    // oldingi savol qayta so'raladi
   s.answers.pop();
+  s.showAllFor = null;
   s.current = null;
 
   await askNext(ctx, id);
@@ -358,18 +399,44 @@ async function submitAndPreview(ctx, id) {
   await renderPreview(ctx, id, false);
 }
 
+// HTML formatida, raqamlar tekislangan
 function previewLines(s) {
-  return s.siteRows.map(r => `${r.lesson}. ${r.topic}${r.hw ? ` — ${r.hw}` : ''}`);
+  const width = String(s.siteRows.length).length;
+  return s.siteRows.map(r => {
+    const num = String(r.lesson || r.n).padStart(width, ' ');
+    const topic = esc(r.topic);
+    const hw = r.hw ? ` — <i>${esc(r.hw)}</i>` : '';
+    return r.ok
+      ? `${num}. ${topic}${hw}`
+      : `⚠️ <b>${num}. ${topic}</b>${hw}`;
+  });
+}
+
+// Fayl uchun — belgilarsiz
+function plainLines(s) {
+  return s.siteRows.map(r => `${r.lesson || r.n}. ${r.topic}${r.hw ? ` — ${r.hw}` : ''}`);
 }
 
 function previewHeader(s) {
-  const head = s.answers.map(a => `${a.ask}: ${a.optionLabel}`).join(' · ');
+  const get = ask => s.answers.find(a => a.ask === ask)?.optionLabel || '';
+  const subject = esc(get('Fan'));
+  const rest = [get('Sinf'), get('Davr'), get("O'quv guruhi")]
+    .filter(v => v && v !== 'Весь класс').map(esc).join(' · ');
+
   const total = s.siteRows.length;
-  const extra = total - s.ok;
-  const note = extra > 0
-    ? `\nOxirgi ${extra} tasiga jurnalda joy yo'q.`
-    : '';
-  return `${head}\n\nTopildi: ${total} ta mavzu, jurnalda ${s.ok} ta dars.${note}`;
+  const bad = s.bad?.length || 0;
+
+  const title = `📗 <b>${subject}</b>${rest ? ` · ${rest}` : ''}`;
+  const stats = bad
+    ? `${total} mavzu · ✅ ${s.ok} tayyor · ⚠️ ${bad} xato`
+    : `${total} mavzu · ✅ hammasi tayyor`;
+
+  if (!bad) return `${title}\n${stats}`;
+
+  const nums = s.bad.slice(0, 10).map(r => r.lesson || r.n).join(', ');
+  const more = bad > 10 ? '…' : '';
+  return `${title}\n${stats}\n\n<b>Xato qatorlar:</b> ${nums}${more}\n` +
+         `<i>Import qilsangiz ular kirmaydi.</i>`;
 }
 
 function previewKb(s, { truncated }) {
@@ -387,17 +454,26 @@ async function renderPreview(ctx, id, full) {
   const header = previewHeader(s);
 
   if (full) {
-    await sendChunks(ctx, [header, '', ...lines], previewKb(s, { truncated: false }));
+    await ctx.reply(header, { parse_mode: 'HTML' });
+    await sendChunks(ctx, lines, previewKb(s, { truncated: false }), plainLines(s));
     return;
   }
 
-  const whole = `${header}\n\n${lines.join('\n')}\n\nYuklaymi?`;
+  const body = lines.join('\n');
+  const whole = `${header}\n\n${body}\n\nYuklaymi?`;
+
   if (whole.length <= CHUNK) {
-    return ctx.reply(whole, { reply_markup: previewKb(s, { truncated: false }) });
+    return ctx.reply(whole, {
+      parse_mode: 'HTML',
+      reply_markup: previewKb(s, { truncated: false }),
+    });
   }
 
-  const short = [...lines.slice(0, 3), '...', lines[lines.length - 1]].join('\n');
+  // Juda uzun: bosh qism + xato qatorlar
+  const bad = lines.filter(l => l.startsWith('⚠️')).slice(0, 5);
+  const short = [...lines.slice(0, 3), '…', ...(bad.length ? bad : [lines.at(-1)])].join('\n');
   await ctx.reply(`${header}\n\n${short}\n\nYuklaymi?`, {
+    parse_mode: 'HTML',
     reply_markup: previewKb(s, { truncated: true }),
   });
 }
@@ -418,9 +494,10 @@ bot.callbackQuery('merge', async ctx => {
   await ctx.answerCallbackQuery();
   s.step = 'merge';
   await ctx.reply(
-    `Qaysi mavzularni birlashtiramiz?\n\n` +
-    `Yonma-yon turgan juftliklarni yozing, masalan:\n3-4, 8-9\n\n` +
-    `Bekor qilish uchun "❌ Bekor".`
+    `🔗 <b>Mavzularni birlashtirish</b>\n\n` +
+    `Yonma-yon turgan juftliklarni yozing:\n<code>3-4, 8-9</code>\n\n` +
+    `<i>Bekor qilish uchun "❌ Bekor".</i>`,
+    { parse_mode: 'HTML' }
   );
 });
 
@@ -473,10 +550,12 @@ bot.callbackQuery('go', async ctx => {
   try {
     const shot = await s.es.confirmImport();
     const skipped = s.bad?.length
-      ? `\n\nKirmadi (${s.bad.length} ta):\n` + s.bad.map(r => `${r.lesson}. ${r.topic}`).join('\n')
+      ? `\n\n⚠️ Kirmadi (${s.bad.length} ta):\n` +
+        s.bad.map(r => `${r.lesson || r.n}. ${esc(r.topic)}`).join('\n')
       : '';
     await ctx.replyWithPhoto(new InputFile(shot, 'result.png'), {
-      caption: `✅ ${s.ok} ta dars kiritildi.${skipped}`.slice(0, 1000),
+      caption: `✅ <b>${s.ok} ta dars kiritildi.</b>${skipped}`.slice(0, 1000),
+      parse_mode: 'HTML',
       reply_markup: mainKb,
     });
   } catch (e) {
