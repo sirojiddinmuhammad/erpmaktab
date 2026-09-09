@@ -1,29 +1,17 @@
 import 'dotenv/config';
 
-// --- muhit o'zgaruvchilarini tekshirish ---
-const missing = ['BOT_TOKEN', 'DATABASE_URL', 'ENC_KEY'].filter(k => !process.env[k]);
-if (missing.length) {
-  console.error(`XATO: quyidagi o'zgaruvchilar yo'q: ${missing.join(', ')}`);
-  process.exit(1);
-}
+const need = ['BOT_TOKEN', 'DATABASE_URL', 'ENC_KEY'].filter(k => !process.env[k]);
+if (need.length) { console.error(`XATO: yo'q o'zgaruvchilar: ${need.join(', ')}`); process.exit(1); }
 if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENC_KEY)) {
-  console.error("XATO: ENC_KEY 64 ta hex belgi bo'lishi kerak. Yaratish: openssl rand -hex 32");
-  process.exit(1);
-}
-try {
-  const u = new URL(process.env.DATABASE_URL);
-  console.log(`DB: host=${u.hostname} user=${u.username} db=${u.pathname.slice(1)} parol=${u.password ? 'bor' : "YO'Q"}`);
-  if (!u.password) { console.error('XATO: DATABASE_URL ichida parol yo\'q.'); process.exit(1); }
-} catch {
-  console.error('XATO: DATABASE_URL noto\'g\'ri formatda.');
-  process.exit(1);
+  console.error('XATO: ENC_KEY 64 ta hex belgi bo\'lishi kerak.'); process.exit(1);
 }
 
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { EmaktabSession } from './emaktab.js';
 import { readRows, writeRows, parsePairs, applyMerges } from './xlsx.js';
 import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
-import { getCreds, setCreds, saveState, getState, getName, ensureSchema } from './db.js';
+import { t, money, LANGS, LANG_NAME } from './i18n.js';
+import * as db from './db.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -32,30 +20,45 @@ const TMP = '/tmp/emaktab';
 const TIMEOUT = 15 * 60 * 1000;
 const CHUNK = 3500;
 
-const esc = t => String(t ?? '')
-  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const ADMIN_ID = Number(process.env.ADMIN_ID || 0);
+const CARD = process.env.CARD_NUMBER || '0000 0000 0000 0000';
+const CARD_HOLDER = process.env.CARD_HOLDER || '';
 
-const live = new Map();     // userId -> sessiya
-const pending = new Map();  // userId -> login bosqichi
+const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-const mainKb = new Keyboard()
-  .text('📤 Import').row()
-  .text('🔑 Login').text('❌ Bekor')
-  .resized()
-  .persistent();
+const live = new Map();    // import sessiyasi
+const flow = new Map();    // login / topup bosqichlari
+const langCache = new Map();
 
-const FIELDS = [
-  { label: 'Учебный год',    ask: "O'quv yili" },
-  { label: 'Класс',          ask: 'Sinf' },
-  { label: 'Предмет',        ask: 'Fan' },
-  { label: 'Учебная группа', ask: "O'quv guruhi" },
-  { label: 'Учебный период', ask: 'Davr' },
-];
+async function L(id) {
+  if (langCache.has(id)) return langCache.get(id);
+  const u = await db.ensureUser(id);
+  const lang = u.lang || 'uz';
+  langCache.set(id, lang);
+  return lang;
+}
+
+function mainKb(lang) {
+  return new Keyboard()
+    .text(t(lang, 'btn_import')).row()
+    .text(t(lang, 'btn_profile')).text(t(lang, 'btn_balance')).row()
+    .text(t(lang, 'btn_lang')).text(t(lang, 'btn_cancel'))
+    .resized().persistent();
+}
+
+// Tugma matni -> amal (ikkala tilda)
+const BTN = {};
+for (const lg of LANGS) {
+  BTN[t(lg, 'btn_import')]  = 'import';
+  BTN[t(lg, 'btn_profile')] = 'profile';
+  BTN[t(lg, 'btn_balance')] = 'balance';
+  BTN[t(lg, 'btn_lang')]    = 'lang';
+  BTN[t(lg, 'btn_cancel')]  = 'cancel';
+}
 
 setInterval(() => {
-  for (const [id, s] of live) {
+  for (const [id, s] of live)
     if (Date.now() - s.es.lastUsed > TIMEOUT) { s.es.close(); live.delete(id); }
-  }
 }, 60_000);
 
 async function endSession(id) {
@@ -67,8 +70,7 @@ async function endSession(id) {
   }
 }
 
-// Uzun ro'yxatni bo'lib yuborish, tugmalar oxirgi xabarda
-async function sendChunks(ctx, lines, kb, plainLines) {
+async function sendChunks(ctx, lines, kb, plain) {
   const parts = [];
   let buf = '';
   for (const l of lines) {
@@ -78,114 +80,291 @@ async function sendChunks(ctx, lines, kb, plainLines) {
   if (buf.trim()) parts.push(buf.trimEnd());
 
   if (parts.length > 10) {
-    await ctx.replyWithDocument(
-      new InputFile(Buffer.from((plainLines || lines).join('\n'), 'utf8'), 'mavzular.txt'),
-      { caption: "Ro'yxat juda uzun — fayl qilib yubordim.", reply_markup: kb }
+    return ctx.replyWithDocument(
+      new InputFile(Buffer.from((plain || lines).join('\n'), 'utf8'), 'mavzular.txt'),
+      { reply_markup: kb }
     );
-    return;
   }
-
   for (let i = 0; i < parts.length; i++) {
     const last = i === parts.length - 1;
-    await ctx.reply(parts[i], {
-      parse_mode: 'HTML',
-      ...(last ? { reply_markup: kb } : {}),
-    });
+    await ctx.reply(parts[i], { parse_mode: 'HTML', ...(last ? { reply_markup: kb } : {}) });
   }
 }
 
-// ---------- start / tugmalar ----------
+// ---------- /start va til ----------
 bot.command('start', async ctx => {
-  const name = await getName(ctx.from.id);
+  const id = ctx.from.id;
+  const u = await db.ensureUser(id);
+  if (!u.lang) return askLang(ctx, 'uz');
+
+  const lang = await L(id);
   await ctx.reply(
-    name
-      ? `Salom, ${name}! Yuklash uchun "📤 Import" tugmasini bosing.`
-      : 'Salom! Avval "🔑 Login" tugmasi orqali eMaktab hisobingizni ulang.',
-    { reply_markup: mainKb }
+    u.full_name ? t(lang, 'start_known', { name: esc(u.full_name) }) : t(lang, 'start_anon'),
+    { parse_mode: 'HTML', reply_markup: mainKb(lang) }
   );
 });
 
-bot.hears('📤 Import', ctx => startImport(ctx));
-bot.hears('🔑 Login', ctx => startLogin(ctx));
-bot.hears('❌ Bekor', async ctx => {
-  pending.delete(ctx.from.id);
-  await endSession(ctx.from.id);
-  await ctx.reply('Bekor qilindi.', { reply_markup: mainKb });
+async function askLang(ctx, lang) {
+  const kb = new InlineKeyboard();
+  LANGS.forEach(l => kb.text(LANG_NAME[l], `lang:${l}`));
+  await ctx.reply(t(lang, 'lang_choose'), { reply_markup: kb });
+}
+
+bot.callbackQuery(/^lang:(\w+)$/, async ctx => {
+  const id = ctx.from.id;
+  const lang = ctx.match[1];
+  await db.setLang(id, lang);
+  langCache.set(id, lang);
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(t(lang, 'lang_set'));
+  await ctx.reply(t(lang, 'start_anon'), { reply_markup: mainKb(lang) });
 });
 
-// ---------- login ----------
-async function startLogin(ctx) {
-  pending.set(ctx.from.id, { stage: 'user' });
-  await ctx.reply('eMaktab loginingizni yuboring:');
-}
-bot.command('login', startLogin);
+// ---------- asosiy tugmalar ----------
+async function showProfile(ctx, id, lang) {
+  const u = await db.getUser(id);
+  const q = await db.checkQuota(id);
+  const plan =
+    q.mode === 'sub'  ? t(lang, 'plan_sub', { date: String(u.sub_until).slice(0, 10) }) :
+    q.mode === 'free' ? t(lang, 'plan_free', { n: q.left }) :
+                        t(lang, 'plan_pay', { price: money(db.PRICE_IMPORT) });
 
-bot.on('message:text', async (ctx, next) => {
+  const kb = new InlineKeyboard().text(t(lang, 'btn_login'), 'login');
+  await ctx.reply(t(lang, 'profile', {
+    name: esc(u.full_name || t(lang, 'not_set')),
+    login: esc(u.username || t(lang, 'not_set')),
+    lang: LANG_NAME[lang],
+    balance: money(u.balance),
+    plan,
+    imports: u.imports_ok || 0,
+  }), { parse_mode: 'HTML', reply_markup: kb });
+}
+
+async function showBalance(ctx, id, lang) {
+  const u = await db.getUser(id);
+  const q = await db.checkQuota(id);
+  const plan =
+    q.mode === 'sub'  ? t(lang, 'plan_sub', { date: String(u.sub_until).slice(0, 10) }) :
+    q.mode === 'free' ? t(lang, 'plan_free', { n: q.left }) : '';
+
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'btn_topup'), 'topup').text(t(lang, 'btn_history'), 'history').row()
+    .text(t(lang, 'btn_sub'), 'buysub');
+
+  await ctx.reply(t(lang, 'balance', {
+    balance: money(u.balance), plan,
+    price: money(db.PRICE_IMPORT), sub: money(db.PRICE_SUB),
+  }), { parse_mode: 'HTML', reply_markup: kb });
+}
+
+// ---------- matnli xabarlar ----------
+bot.on('message:text', async ctx => {
   const id = ctx.from.id;
   const text = ctx.message.text;
-  if (text.startsWith('/') || ['📤 Import', '🔑 Login', '❌ Bekor'].includes(text)) return next();
+  const lang = await L(id);
+
+  if (text.startsWith('/')) return;
+
+  // tugmalar
+  const act = BTN[text];
+  if (act === 'import')  return startImport(ctx, id, lang);
+  if (act === 'profile') return showProfile(ctx, id, lang);
+  if (act === 'balance') return showBalance(ctx, id, lang);
+  if (act === 'lang')    return askLang(ctx, lang);
+  if (act === 'cancel') {
+    flow.delete(id);
+    await endSession(id);
+    return ctx.reply(t(lang, 'cancelled'), { reply_markup: mainKb(lang) });
+  }
 
   // birlashtirish javobi
   const s = live.get(id);
-  if (s?.step === 'merge') return handleMergeInput(ctx, id, text);
+  if (s?.step === 'merge') return handleMerge(ctx, id, lang, text);
 
-  const p = pending.get(id);
-  if (!p) return next();
+  // login / to'ldirish bosqichlari
+  const f = flow.get(id);
+  if (!f) return;
 
-  if (p.stage === 'user') {
-    p.username = text.trim();
-    p.stage = 'pass';
-    return ctx.reply("Endi parolni yuboring. (Xabar avtomat o'chiriladi)");
+  if (f.kind === 'login') {
+    if (f.stage === 'user') {
+      f.username = text.trim();
+      f.stage = 'pass';
+      return ctx.reply(t(lang, 'ask_password'));
+    }
+    return doLogin(ctx, id, lang, f.username, text);
   }
 
-  const password = text;
-  await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch(() => {});
-  pending.delete(id);
-
-  const wait = await ctx.reply('Tekshirilyapti...');
-  const es = new EmaktabSession();
-  try {
-    await es.launch();
-    const { state, fullName } = await es.login(p.username, password);
-    await setCreds(id, p.username, password, fullName);
-    await saveState(id, state);
-    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
-      fullName
-        ? `✅ Ulandi: ${fullName}\n\nEndi "📤 Import" tugmasini bosing.`
-        : '✅ Ulandi. Endi "📤 Import" tugmasini bosing.');
-  } catch (e) {
-    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
-      e.message.startsWith('BAD_CREDENTIALS')
-        ? "❌ Login yoki parol noto'g'ri. Qayta urinib ko'ring."
-        : `❌ Xatolik: ${e.message}`);
-  } finally {
-    await es.close();
+  if (f.kind === 'topup' && f.stage === 'amount') {
+    const amount = Number(String(text).replace(/[^\d]/g, ''));
+    if (!amount || amount < 1000) return ctx.reply(t(lang, 'topup_bad_amount'));
+    f.amount = amount;
+    f.stage = 'shot';
+    return ctx.reply(t(lang, 'topup_screenshot'));
   }
 });
 
-// ---------- import boshlanishi ----------
-async function startImport(ctx) {
+// ---------- login ----------
+bot.callbackQuery('login', async ctx => {
   const id = ctx.from.id;
-  if (!(await getCreds(id)))
-    return ctx.reply('Avval "🔑 Login" tugmasi orqali hisobingizni ulang.', { reply_markup: mainKb });
+  const lang = await L(id);
+  flow.set(id, { kind: 'login', stage: 'user' });
+  await ctx.answerCallbackQuery();
+  await ctx.reply(t(lang, 'ask_login'));
+});
+
+async function doLogin(ctx, id, lang, username, password) {
+  await ctx.api.deleteMessage(ctx.chat.id, ctx.message.message_id).catch(() => {});
+  flow.delete(id);
+
+  const wait = await ctx.reply(t(lang, 'checking'));
+  const es = new EmaktabSession();
+  try {
+    await es.launch();
+    const { state, fullName } = await es.login(username, password);
+    await db.setCreds(id, username, password, fullName);
+    await db.saveState(id, state);
+    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
+      fullName ? t(lang, 'connected', { name: fullName }) : t(lang, 'connected_no'));
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
+      e.message.startsWith('BAD_CREDENTIALS')
+        ? t(lang, 'bad_creds')
+        : t(lang, 'error', { msg: e.message }));
+  } finally {
+    await es.close();
+  }
+}
+
+// ---------- balans: to'ldirish ----------
+bot.callbackQuery('topup', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  flow.set(id, { kind: 'topup', stage: 'amount' });
+  await ctx.answerCallbackQuery();
+  await ctx.reply(t(lang, 'topup_card', { card: CARD, holder: esc(CARD_HOLDER) }),
+    { parse_mode: 'HTML' });
+});
+
+bot.on('message:photo', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  const f = flow.get(id);
+  if (f?.kind !== 'topup' || f.stage !== 'shot') return;
+
+  const fileId = ctx.message.photo.at(-1).file_id;
+  const payId = await db.createPayment(id, f.amount, fileId);
+  flow.delete(id);
+
+  await ctx.reply(t(lang, 'topup_sent'), { reply_markup: mainKb(lang) });
+
+  if (ADMIN_ID) {
+    const u = await db.getUser(id);
+    const kb = new InlineKeyboard()
+      .text('✅ Tasdiqlash', `pay:ok:${payId}`)
+      .text('❌ Rad etish', `pay:no:${payId}`);
+    await bot.api.sendPhoto(ADMIN_ID, fileId, {
+      caption: `💰 <b>To'ldirish so'rovi #${payId}</b>\n` +
+               `${esc(u.full_name || '—')} · @${ctx.from.username || id}\n` +
+               `Summa: <b>${money(f.amount)}</b> so'm`,
+      parse_mode: 'HTML',
+      reply_markup: kb,
+    }).catch(e => console.error('admin xabar:', e.message));
+  }
+});
+
+bot.callbackQuery(/^pay:(ok|no):(\d+)$/, async ctx => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery('Ruxsat yo\'q');
+  const [, action, idStr] = ctx.match;
+  const payId = Number(idStr);
+  await ctx.answerCallbackQuery();
+
+  if (action === 'no') {
+    const tgId = await db.rejectPayment(payId);
+    await ctx.editMessageCaption({ caption: `❌ Rad etildi (#${payId})` });
+    if (tgId) {
+      const lang = await L(tgId);
+      await bot.api.sendMessage(tgId, t(lang, 'topup_rejected')).catch(() => {});
+    }
+    return;
+  }
+
+  const res = await db.approvePayment(payId);
+  if (!res) return ctx.editMessageCaption({ caption: `⚠️ #${payId} allaqachon ko'rilgan` });
+
+  await ctx.editMessageCaption({
+    caption: `✅ Tasdiqlandi (#${payId})\n+${money(res.amount)} so'm · Balans: ${money(res.balance)}`,
+  });
+  const lang = await L(res.tgId);
+  await bot.api.sendMessage(res.tgId,
+    t(lang, 'topup_ok', { amount: money(res.amount), balance: money(res.balance) }),
+    { reply_markup: mainKb(lang) }
+  ).catch(() => {});
+});
+
+bot.callbackQuery('history', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  await ctx.answerCallbackQuery();
+
+  const rows = await db.ledgerRecent(id);
+  if (!rows.length) return ctx.reply(t(lang, 'history_empty'));
+
+  const label = { topup: '➕', import: '📤', subscription: '⭐' };
+  const list = rows.map(r =>
+    `${label[r.reason] || '•'} ${r.delta > 0 ? '+' : ''}${money(r.delta)} · ` +
+    `${new Date(r.created_at).toISOString().slice(0, 10)}`
+  ).join('\n');
+
+  await ctx.reply(t(lang, 'history', { rows: list }), { parse_mode: 'HTML' });
+});
+
+bot.callbackQuery('buysub', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  await ctx.answerCallbackQuery();
+
+  const r = await db.buySub(id);
+  if (r.ok) {
+    return ctx.reply(t(lang, 'sub_bought', { date: String(r.until).slice(0, 10) }),
+      { reply_markup: mainKb(lang) });
+  }
+  if (r.reason === 'have') {
+    return ctx.reply(t(lang, 'sub_have', { date: String(r.until).slice(0, 10) }));
+  }
+  return ctx.reply(t(lang, 'sub_nomoney', {
+    sub: money(db.PRICE_SUB), balance: money(r.balance),
+  }));
+});
+
+// ---------- import ----------
+async function startImport(ctx, id, lang) {
+  if (!(await db.getCreds(id)))
+    return ctx.reply(t(lang, 'need_login'), { reply_markup: mainKb(lang) });
+
+  const q = await db.checkQuota(id);
+  if (!q.ok) {
+    return ctx.reply(t(lang, 'no_money', {
+      price: money(db.PRICE_IMPORT), balance: money(q.balance),
+    }), { reply_markup: mainKb(lang) });
+  }
 
   await endSession(id);
-  live.set(id, { es: new EmaktabSession(), step: 'await_file', fields: [], asked: [], answers: [] });
-  await ctx.reply('Excel faylni yuboring (.xls yoki .xlsx).', { reply_markup: mainKb });
+  live.set(id, { es: new EmaktabSession(), step: 'await_file', fields: [], asked: [], answers: [], quota: q });
+  await ctx.reply(t(lang, 'send_file'), { reply_markup: mainKb(lang) });
 }
-bot.command('import', startImport);
+bot.command('import', async ctx => startImport(ctx, ctx.from.id, await L(ctx.from.id)));
 
 bot.on('message:document', async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
   if (!s || s.step !== 'await_file') return;
 
   const doc = ctx.message.document;
-  if (!/\.xlsx?$/i.test(doc.file_name || ''))
-    return ctx.reply('Faqat .xls yoki .xlsx fayl qabul qilinadi.');
-  if (doc.file_size > 5_000_000) return ctx.reply('Fayl juda katta.');
+  if (!/\.xlsx?$/i.test(doc.file_name || '')) return ctx.reply(t(lang, 'only_xlsx'));
+  if (doc.file_size > 5_000_000) return ctx.reply(t(lang, 'too_big'));
 
-  const wait = await ctx.reply('Fayl qabul qilindi. eMaktabga ulanyapman...');
+  const wait = await ctx.reply(t(lang, 'file_got'));
 
   try {
     const f = await ctx.api.getFile(doc.file_id);
@@ -193,75 +372,76 @@ bot.on('message:document', async ctx => {
     await fs.mkdir(TMP, { recursive: true });
     const local = path.join(TMP, `${id}_${Date.now()}${path.extname(doc.file_name)}`);
     await fs.writeFile(local, Buffer.from(await (await fetch(url)).arrayBuffer()));
+
     s.filePath = local;
     s.hints = parseFileName(doc.file_name);
-
-    // Eski .xls formatini o'qiy olmaymiz — birlashtirish faqat .xlsx uchun
     s.canMerge = /\.xlsx$/i.test(doc.file_name);
     if (s.canMerge) {
       try {
-        const parsed = await readRows(local);
-        s.rows = parsed.rows;
-        s.sheetName = parsed.sheetName;
+        const p = await readRows(local);
+        s.rows = p.rows;
+        s.sheetName = p.sheetName;
       } catch { s.canMerge = false; }
     }
 
-    const saved = await getState(id);
+    const saved = await db.getState(id);
     let ok = saved ? await s.es.restore(saved) : false;
     if (!ok) {
       await s.es.close();
       s.es = new EmaktabSession();
       await s.es.launch();
-      const { username, password } = await getCreds(id);
+      const { username, password } = await db.getCreds(id);
       const { state } = await s.es.login(username, password);
-      await saveState(id, state);
+      await db.saveState(id, state);
     }
 
     await s.es.uploadFile(local);
-
     s.step = 'params';
     s.fields = [...FIELDS];
     s.asked = [];
     s.answers = [];
     await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
-    await askNext(ctx, id);
+    await askNext(ctx, id, lang);
   } catch (e) {
     await endSession(id);
     await ctx.reply(e.message.startsWith('BAD_CREDENTIALS')
-      ? "❌ Login yoki parol noto'g'ri. Qayta /login qiling."
-      : `❌ Xatolik: ${e.message}`);
+      ? t(lang, 'bad_creds') : t(lang, 'error', { msg: e.message }));
   }
 });
 
-// ---------- parametrlar ----------
-async function askNext(ctx, id) {
+const FIELDS = [
+  { label: 'Учебный год',    uz: "O'quv yili",   ru: 'учебный год' },
+  { label: 'Класс',          uz: 'Sinf',         ru: 'класс' },
+  { label: 'Предмет',        uz: 'Fan',          ru: 'предмет' },
+  { label: 'Учебная группа', uz: "O'quv guruhi", ru: 'учебную группу' },
+  { label: 'Учебный период', uz: 'Davr',         ru: 'период' },
+];
+
+async function askNext(ctx, id, lang) {
   const s = live.get(id);
   s.es.touch();
 
   const field = s.fields.shift();
-  if (!field) return startMapping(ctx, id);
+  if (!field) return startMapping(ctx, id, lang);
 
   const all = await s.es.options(field.label);
   if (!all.length) {
     const info = await s.es.debugSelect(field.label);
     await endSession(id);
-    return ctx.reply(`❌ "${field.ask}" ro'yxati bo'sh chiqdi.\n\n${info}`);
+    return ctx.reply(t(lang, 'empty_list', { field: field[lang], info }));
   }
 
-  // Fayl nomidagi ishoralar bo'yicha filtr
   const showAll = s.showAllFor === field.label;
   const hit = showAll ? [] : filterOptions(field.label, all, s.hints);
   const opts = hit.length ? hit : all;
   const filtered = opts.length < all.length;
 
-  // Avtomat qo'yish: yagona variant bo'lsa, yoki yil/chorak fayldan aniq bo'lsa
-  const auto = all.length === 1 || (filtered && opts.length === 1 && AUTO_FIELDS.has(field.label));
-  if (auto) {
+  if (all.length === 1 || (filtered && opts.length === 1 && AUTO_FIELDS.has(field.label))) {
     await s.es.pick(field.label, opts[0].index);
     s.asked.push(field);
-    s.answers.push({ label: field.label, ask: field.ask, optionLabel: opts[0].label });
+    s.answers.push({ label: field.label, optionLabel: opts[0].label });
     s.showAllFor = null;
-    return askNext(ctx, id);
+    return askNext(ctx, id, lang);
   }
 
   s.current = field;
@@ -273,125 +453,120 @@ async function askNext(ctx, id) {
     if (i % 3 === 2) kb.row();
   });
   kb.row();
-  if (filtered) kb.text('🔍 Hammasi', 'all');
-  if (s.asked.length) kb.text('⬅️ Orqaga', 'back');
+  if (filtered) kb.text(t(lang, 'btn_all'), 'all');
+  if (s.asked.length) kb.text(t(lang, 'btn_back'), 'back');
 
   const done = s.answers.map(a => `<i>${esc(a.optionLabel)}</i>`).join(' · ');
-  const note = filtered ? ` <i>(fayl bo'yicha)</i>` : '';
   await ctx.reply(
-    (done ? `${done}\n\n` : '') + `<b>${esc(field.ask)}</b>ni tanlang:${note}`,
+    (done ? `${done}\n\n` : '') +
+    t(lang, 'choose', { field: esc(field[lang]) }) + (filtered ? t(lang, 'by_file') : ''),
     { parse_mode: 'HTML', reply_markup: kb }
   );
 }
 
-bot.callbackQuery('all', async ctx => {
-  const id = ctx.from.id;
-  const s = live.get(id);
-  if (!s?.current) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
-
-  await ctx.answerCallbackQuery();
-  await ctx.editMessageText("To'liq ro'yxat:");
-
-  s.showAllFor = s.current.label;
-  s.fields.unshift(s.current);
-  s.current = null;
-  await askNext(ctx, id);
-});
-
 bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
-  if (!s?.current) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+  if (!s?.current) return ctx.answerCallbackQuery(t(lang, 'session_end'));
 
   const opt = s.opts[Number(ctx.match[1])];
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`${s.current.ask}: ${opt.label} ✅`);
+  await ctx.editMessageText(`${esc(s.current[lang])}: ${esc(opt.label)} ✅`, { parse_mode: 'HTML' });
 
   await s.es.pick(s.current.label, opt.index);
   s.asked.push(s.current);
-  s.answers.push({ label: s.current.label, ask: s.current.ask, optionLabel: opt.label });
+  s.answers.push({ label: s.current.label, optionLabel: opt.label });
   s.showAllFor = null;
   s.current = null;
+  await askNext(ctx, id, lang);
+});
 
-  await askNext(ctx, id);
+bot.callbackQuery('all', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  const s = live.get(id);
+  if (!s?.current) return ctx.answerCallbackQuery(t(lang, 'session_end'));
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(t(lang, 'full_list'));
+  s.showAllFor = s.current.label;
+  s.fields.unshift(s.current);
+  s.current = null;
+  await askNext(ctx, id, lang);
 });
 
 bot.callbackQuery('back', async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
-  if (!s?.current || !s.asked.length) return ctx.answerCallbackQuery('Orqaga qaytib bo\'lmaydi.');
+  if (!s?.current || !s.asked.length) return ctx.answerCallbackQuery(t(lang, 'session_end'));
 
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('⬅️ Orqaga');
-
-  s.fields.unshift(s.current);        // hozirgi savol navbatga qaytadi
-  s.fields.unshift(s.asked.pop());    // oldingi savol qayta so'raladi
+  await ctx.editMessageText(t(lang, 'btn_back'));
+  s.fields.unshift(s.current);
+  s.fields.unshift(s.asked.pop());
   s.answers.pop();
   s.showAllFor = null;
   s.current = null;
-
-  await askNext(ctx, id);
+  await askNext(ctx, id, lang);
 });
 
 // ---------- ustun mosligi ----------
-async function startMapping(ctx, id) {
+async function startMapping(ctx, id, lang) {
   const s = live.get(id);
-  await ctx.reply('Ustunlar moslanyapti...');
+  await ctx.reply(t(lang, 'mapping'));
 
   const res = await s.es.mapColumns();
-  if (res.done === res.need) return submitAndPreview(ctx, id);
+  if (res.done === res.need) return submitAndPreview(ctx, id, lang);
 
   const sels = await s.es.mappingSelects();
   if (!sels.length) {
     await endSession(id);
-    return ctx.reply(`❌ Ustun moslash jadvali topilmadi.\n\n${res.report}`);
+    return ctx.reply(t(lang, 'no_map', { report: res.report }));
   }
-
   s.manual = sels;
-  await ctx.reply("Ustunlarni qo'lda moslaymiz.");
-  return askMapping(ctx, id);
+  await ctx.reply(t(lang, 'manual_map'));
+  return askMapping(ctx, id, lang);
 }
 
-async function askMapping(ctx, id) {
+async function askMapping(ctx, id, lang) {
   const s = live.get(id);
   s.es.touch();
-
   const item = s.manual.shift();
-  if (!item) return submitAndPreview(ctx, id);
+  if (!item) return submitAndPreview(ctx, id, lang);
 
   s.curMap = item;
   const kb = new InlineKeyboard();
   item.options.forEach((o, i) => kb.text(o.label, `m:${i}`).row());
-
-  await ctx.reply(`Fayldagi "${item.label}" ustuni nimaga to'g'ri keladi?`, { reply_markup: kb });
+  await ctx.reply(t(lang, 'map_q', { col: esc(item.label) }), { parse_mode: 'HTML', reply_markup: kb });
 }
 
 bot.callbackQuery(/^m:(\d+)$/, async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
-  if (!s?.curMap) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+  if (!s?.curMap) return ctx.answerCallbackQuery(t(lang, 'session_end'));
 
   const opt = s.curMap.options[Number(ctx.match[1])];
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText(`${s.curMap.label} → ${opt.label} ✅`);
-
+  await ctx.editMessageText(`${esc(s.curMap.label)} → ${esc(opt.label)} ✅`, { parse_mode: 'HTML' });
   await s.es.setSelect(s.curMap.selectIndex, opt.index);
   s.curMap = null;
-  await askMapping(ctx, id);
+  await askMapping(ctx, id, lang);
 });
 
 // ---------- tekshiruv ----------
-async function submitAndPreview(ctx, id) {
+async function submitAndPreview(ctx, id, lang) {
   const s = live.get(id);
   await s.es.submitMapping();
 
-  const { rows, ok, bad, diag, mapReport } = await s.es.preview();
+  const { rows, diag, mapReport } = await s.es.preview();
   if (!rows.length) {
     await endSession(id);
-    return ctx.reply(`❌ Tekshiruv jadvali topilmadi.\n\n${mapReport}\n\n${diag}`.slice(0, 3800));
+    return ctx.reply(t(lang, 'no_table', { info: `${mapReport}\n\n${diag}` }).slice(0, 3800));
   }
 
-  // Himoya: eski emaktab.js "ok" bermasa, holat matnidan aniqlaymiz
   s.siteRows = rows.map(r => ({
     ...r,
     ok: typeof r.ok === 'boolean' ? r.ok : /Готов|Tayyor/i.test(r.status || ''),
@@ -400,170 +575,165 @@ async function submitAndPreview(ctx, id) {
   s.ok = s.siteRows.length - s.bad.length;
   s.step = 'confirm';
 
-  await renderPreview(ctx, id, false);
+  await renderPreview(ctx, id, lang, false);
 }
 
-// HTML formatida, raqamlar tekislangan
-function previewLines(s) {
-  const width = String(s.siteRows.length).length;
+const lines_ = s => {
+  const w = String(s.siteRows.length).length;
   return s.siteRows.map(r => {
-    const num = String(r.lesson || r.n).padStart(width, ' ');
-    const topic = esc(r.topic);
+    const n = String(r.lesson || r.n).padStart(w, ' ');
     const hw = r.hw ? ` — <i>${esc(r.hw)}</i>` : '';
-    return r.ok
-      ? `${num}. ${topic}${hw}`
-      : `⚠️ <b>${num}. ${topic}</b>${hw}`;
+    return r.ok ? `${n}. ${esc(r.topic)}${hw}` : `⚠️ <b>${n}. ${esc(r.topic)}</b>${hw}`;
   });
-}
+};
+const plain_ = s => s.siteRows.map(r => `${r.lesson || r.n}. ${r.topic}${r.hw ? ` — ${r.hw}` : ''}`);
 
-// Fayl uchun — belgilarsiz
-function plainLines(s) {
-  return s.siteRows.map(r => `${r.lesson || r.n}. ${r.topic}${r.hw ? ` — ${r.hw}` : ''}`);
-}
-
-function previewHeader(s) {
-  const get = ask => s.answers.find(a => a.ask === ask)?.optionLabel || '';
-  const subject = esc(get('Fan'));
-  const rest = [get('Sinf'), get('Davr'), get("O'quv guruhi")]
-    .filter(v => v && v !== 'Весь класс').map(esc).join(' · ');
-
+function header_(s, lang) {
+  const get = l => s.answers.find(a => a.label === l)?.optionLabel || '';
+  const subject = esc(get('Предмет'));
+  const rest = [get('Класс'), get('Учебный период')].filter(Boolean).map(esc).join(' · ');
   const total = s.siteRows.length;
-  const bad = s.bad?.length || 0;
+  const bad = s.bad.length;
 
   const title = `📗 <b>${subject}</b>${rest ? ` · ${rest}` : ''}`;
   const stats = bad
-    ? `${total} mavzu · ✅ ${s.ok} tayyor · ⚠️ ${bad} xato`
-    : `${total} mavzu · ✅ hammasi tayyor`;
+    ? t(lang, 'stats_bad', { n: total, ok: s.ok, bad })
+    : t(lang, 'stats_ok', { n: total });
 
   if (!bad) return `${title}\n${stats}`;
-
-  const nums = s.bad.slice(0, 10).map(r => r.lesson || r.n).join(', ');
-  const more = bad > 10 ? '…' : '';
-  return `${title}\n${stats}\n\n<b>Xato qatorlar:</b> ${nums}${more}\n` +
-         `<i>Import qilsangiz ular kirmaydi.</i>`;
+  const nums = s.bad.slice(0, 10).map(r => r.lesson || r.n).join(', ') + (bad > 10 ? '…' : '');
+  return `${title}\n${stats}\n\n${t(lang, 'bad_rows', { nums })}`;
 }
 
-function previewKb(s, { truncated }) {
-  const kb = new InlineKeyboard().text('✅ Import', 'go');
-  if (s.canMerge) kb.text('🔗 Birlashtirish', 'merge');
+function costNote(s, lang) {
+  const q = s.quota || {};
+  if (q.mode === 'sub')  return t(lang, 'cost_sub');
+  if (q.mode === 'free') return t(lang, 'cost_free', { n: q.left });
+  return t(lang, 'cost_note', { price: money(db.PRICE_IMPORT) });
+}
+
+function previewKb(s, lang, truncated) {
+  const kb = new InlineKeyboard().text(t(lang, 'btn_ok'), 'go');
+  if (s.canMerge) kb.text(t(lang, 'btn_merge'), 'merge');
   kb.row();
-  if (truncated) kb.text("📋 To'liq ro'yxat", 'full');
-  kb.text('❌ Bekor', 'no');
+  if (truncated) kb.text(t(lang, 'btn_full'), 'full');
+  kb.text(t(lang, 'btn_cancel'), 'no');
   return kb;
 }
 
-async function renderPreview(ctx, id, full) {
+async function renderPreview(ctx, id, lang, full) {
   const s = live.get(id);
-  const lines = previewLines(s);
-  const header = previewHeader(s);
+  const lines = lines_(s);
+  const head = header_(s, lang);
+  const tail = `\n\n${t(lang, 'confirm_q')}${costNote(s, lang)}`;
 
   if (full) {
-    await ctx.reply(header, { parse_mode: 'HTML' });
-    await sendChunks(ctx, lines, previewKb(s, { truncated: false }), plainLines(s));
-    return;
+    await ctx.reply(head, { parse_mode: 'HTML' });
+    return sendChunks(ctx, [...lines, tail], previewKb(s, lang, false), plain_(s));
   }
 
-  const body = lines.join('\n');
-  const whole = `${header}\n\n${body}\n\nYuklaymi?`;
+  const whole = `${head}\n\n${lines.join('\n')}${tail}`;
+  if (whole.length <= CHUNK)
+    return ctx.reply(whole, { parse_mode: 'HTML', reply_markup: previewKb(s, lang, false) });
 
-  if (whole.length <= CHUNK) {
-    return ctx.reply(whole, {
-      parse_mode: 'HTML',
-      reply_markup: previewKb(s, { truncated: false }),
-    });
-  }
-
-  // Juda uzun: bosh qism + xato qatorlar
   const bad = lines.filter(l => l.startsWith('⚠️')).slice(0, 5);
   const short = [...lines.slice(0, 3), '…', ...(bad.length ? bad : [lines.at(-1)])].join('\n');
-  await ctx.reply(`${header}\n\n${short}\n\nYuklaymi?`, {
-    parse_mode: 'HTML',
-    reply_markup: previewKb(s, { truncated: true }),
-  });
+  await ctx.reply(`${head}\n\n${short}${tail}`,
+    { parse_mode: 'HTML', reply_markup: previewKb(s, lang, true) });
 }
 
 bot.callbackQuery('full', async ctx => {
   const id = ctx.from.id;
-  if (!live.get(id)?.siteRows) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+  const lang = await L(id);
+  if (!live.get(id)?.siteRows) return ctx.answerCallbackQuery(t(lang, 'session_end'));
   await ctx.answerCallbackQuery();
-  await renderPreview(ctx, id, true);
+  await renderPreview(ctx, id, lang, true);
 });
 
 // ---------- birlashtirish ----------
 bot.callbackQuery('merge', async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
-  if (!s?.rows) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+  if (!s?.rows) return ctx.answerCallbackQuery(t(lang, 'session_end'));
 
   await ctx.answerCallbackQuery();
   s.step = 'merge';
-  await ctx.reply(
-    `🔗 <b>Mavzularni birlashtirish</b>\n\n` +
-    `Yonma-yon turgan juftliklarni yozing:\n<code>3-4, 8-9</code>\n\n` +
-    `<i>Bekor qilish uchun "❌ Bekor".</i>`,
-    { parse_mode: 'HTML' }
-  );
+  await ctx.reply(t(lang, 'merge_prompt'), { parse_mode: 'HTML' });
 });
 
-async function handleMergeInput(ctx, id, text) {
+async function handleMerge(ctx, id, lang, text) {
   const s = live.get(id);
   const { pairs, error } = parsePairs(text, s.rows.length);
-  if (error) return ctx.reply(`❌ ${error}\n\nQayta yozing.`);
+  if (error) return ctx.reply(t(lang, 'merge_err', { err: error }));
 
   const merged = applyMerges(s.rows, pairs);
-  const wait = await ctx.reply(
-    `Birlashtirildi: ${s.rows.length} → ${merged.length} ta dars.\nQayta yuklanyapti...`
-  );
+  const wait = await ctx.reply(t(lang, 'merged', { from: s.rows.length, to: merged.length }));
 
   try {
-    const newPath = path.join(TMP, `${id}_${Date.now()}_merged.xlsx`);
-    await writeRows(merged, newPath, s.sheetName);
-
+    const p = path.join(TMP, `${id}_${Date.now()}_merged.xlsx`);
+    await writeRows(merged, p, s.sheetName);
     await fs.unlink(s.filePath).catch(() => {});
-    s.filePath = newPath;
-    s.prevRows = s.rows;
+    s.filePath = p;
     s.rows = merged;
 
-    await s.es.uploadFile(newPath);
-    await s.es.applyParams(s.answers);
-
+    await s.es.uploadFile(p);
+    await s.es.applyParams(s.answers.map(a => ({ label: a.label, optionLabel: a.optionLabel })));
     await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
     s.step = 'params';
-    await startMapping(ctx, id);
+    await startMapping(ctx, id, lang);
   } catch (e) {
     s.step = 'confirm';
-    await ctx.reply(`❌ Qayta yuklashda xatolik: ${e.message}`);
+    await ctx.reply(t(lang, 'error', { msg: e.message }));
   }
 }
 
 // ---------- yakun ----------
 bot.callbackQuery('no', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
   await ctx.answerCallbackQuery();
-  await endSession(ctx.from.id);
-  await ctx.editMessageText('Bekor qilindi.');
+  await endSession(id);
+  await ctx.editMessageText(t(lang, 'cancelled'));
 });
 
 bot.callbackQuery('go', async ctx => {
   const id = ctx.from.id;
+  const lang = await L(id);
   const s = live.get(id);
-  if (!s) return ctx.answerCallbackQuery('Sessiya tugagan. /import');
+  if (!s) return ctx.answerCallbackQuery(t(lang, 'session_end'));
 
   await ctx.answerCallbackQuery();
-  await ctx.editMessageText('Yuklanyapti...');
+  await ctx.editMessageText(t(lang, 'uploading'));
 
   try {
     const shot = await s.es.confirmImport();
-    const skipped = s.bad?.length
-      ? `\n\n⚠️ Kirmadi (${s.bad.length} ta):\n` +
-        s.bad.map(r => `${r.lesson || r.n}. ${esc(r.topic)}`).join('\n')
-      : '';
+
+    // Pul faqat shu yerda yechiladi
+    const charge = await db.chargeImport(id);
+
+    let caption = t(lang, 'done', { n: s.ok });
+    if (s.bad.length) {
+      caption += t(lang, 'skipped', {
+        n: s.bad.length,
+        rows: s.bad.map(r => `${r.lesson || r.n}. ${esc(r.topic)}`).join('\n'),
+      });
+    }
+    if (charge.ok && charge.mode === 'paid') {
+      caption += t(lang, 'charged', {
+        price: money(db.PRICE_IMPORT), balance: money(charge.balance),
+      });
+    } else if (charge.ok && charge.mode === 'free') {
+      caption += t(lang, 'cost_free', { n: charge.left });
+    }
+
     await ctx.replyWithPhoto(new InputFile(shot, 'result.png'), {
-      caption: `✅ <b>${s.ok} ta dars kiritildi.</b>${skipped}`.slice(0, 1000),
+      caption: caption.slice(0, 1000),
       parse_mode: 'HTML',
-      reply_markup: mainKb,
+      reply_markup: mainKb(lang),
     });
   } catch (e) {
-    await ctx.reply(`❌ Import paytida xatolik: ${e.message}`);
+    await ctx.reply(t(lang, 'error', { msg: e.message }));
   } finally {
     await endSession(id);
   }
@@ -571,6 +741,6 @@ bot.callbackQuery('go', async ctx => {
 
 bot.catch(err => console.error('bot error', err));
 
-await ensureSchema();
+await db.ensureSchema();
 console.log('DB tayyor. Bot ishga tushyapti...');
 bot.start();
