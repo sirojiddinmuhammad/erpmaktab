@@ -173,19 +173,54 @@ export class EmaktabSession {
 
   // ---- 1-qadam: fayl ----
   async uploadFile(filePath) {
-    await this.page.goto(IMPORT_URL, { waitUntil: 'domcontentloaded' });
+    const page = this.page;
 
-    // "Отменить импорт этого файла" — oldingi yarim qolgan importni tozalash
-    const cancel = this.page.locator('text=Отменить импорт этого файла');
-    if (await cancel.count()) {
-      await cancel.first().click();
-      await this.settle();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await page.goto(IMPORT_URL, { waitUntil: 'domcontentloaded' });
+      await this.settle(600);
+
+      if (/login\.emaktab\.uz/.test(page.url())) throw new Error('BAD_CREDENTIALS');
+
+      // Fayl maydoni bormi?
+      const input = page.locator('input[type="file"]');
+      if (await input.count()) {
+        await input.first().setInputFiles(filePath, { timeout: 20000 });
+
+        // "1-qatorda ustun nomlari"
+        const radio = page.locator('input[type="radio"]');
+        if (await radio.count()) await radio.first().check().catch(() => {});
+
+        await page.click('text=Далее');
+        await this.settle(400);
+        return;
+      }
+
+      // Yo'q bo'lsa: yarim qolgan importni bekor qilamiz va qaytadan urinamiz
+      const cancel = page.locator('text=Отменить импорт этого файла');
+      if (await cancel.count()) {
+        await cancel.first().click().catch(() => {});
+        await this.settle(1000);
+        continue;
+      }
+
+      // "Назад" bilan 1-qadamga qaytishga urinamiz
+      const back = page.locator('text=< Назад, text=Назад');
+      if (await back.count()) {
+        await back.first().click().catch(() => {});
+        await this.settle(800);
+        continue;
+      }
+
+      if (attempt === 3) {
+        const info = await page.evaluate(() =>
+          document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 500)
+        ).catch(() => '');
+        throw new Error(
+          `Fayl yuklash maydoni topilmadi.\nURL: ${page.url()}\n\n${info}`
+        );
+      }
+      await this.settle(1000);
     }
-
-    await this.page.setInputFiles('input[type="file"]', filePath);
-    await this.page.check('input[type="radio"][value*="header"], input[type="radio"]'); // 1-qatorda ustun nomlari
-    await this.page.click('text=Далее');
-    await this.settle(400);
   }
 
   // ---- 2-qadam: selectlar ----
