@@ -133,31 +133,42 @@ export class EmaktabSession {
     return { state: await this.ctx.storageState(), fullName };
   }
 
-  // Sahifa sarlavhasidan foydalanuvchi ismini o'qiydi
+  // Foydalanuvchi ismini o'qiydi. Aniq selektordan boshlab, zaxiralar bilan.
   async getUserName() {
     return await this.page.evaluate(() => {
       const clean = t => (t || '').replace(/\s+/g, ' ').trim();
-      const junk = /Помощь|Выход|Yordam|Chiqish|Сотрудник|Учитель|Xodim|O'qituvchi/gi;
+      const good = t => t && t.length >= 3 && t.length <= 60 &&
+        !/Помощь|Выход|Сотрудник|Учитель|Yordam|Chiqish/i.test(t);
 
-      // "Выход" havolasi yonidagi blokda ism turadi
-      const exit = [...document.querySelectorAll('a')]
-        .find(a => /Выход|Chiqish/i.test(a.textContent));
-      if (exit) {
-        let n = exit.parentElement;
-        for (let i = 0; i < 5 && n; i++, n = n.parentElement) {
-          const t = clean(n.innerText).replace(junk, '').trim();
-          if (t.length >= 4 && t.length <= 60 && /[А-ЯЁA-Z]/.test(t)) return t;
-        }
+      // 1) Rasmiy test-id ichidagi ism
+      const box = document.querySelector('[data-test-id="user-profile-info"]');
+      if (box) {
+        const p = box.querySelector('.user-profile-box__initials');
+        if (p && good(clean(p.textContent))) return clean(p.textContent);
       }
 
-      // Zaxira: profil havolasidagi matn
-      const prof = document.querySelector('[class*="user"] a, [class*="profile"] a, a[href*="/user/"]');
-      if (prof) {
-        const t = clean(prof.textContent).replace(junk, '').trim();
-        if (t.length >= 4) return t;
+      // 2) Klass bo'yicha
+      const init = document.querySelector('.user-profile-box__initials');
+      if (init && good(clean(init.textContent))) return clean(init.textContent);
+
+      // 3) "Сотрудник" / "Учитель" yozuvidan oldingi qator
+      const cat = [...document.querySelectorAll('p, span, div')]
+        .find(e => e.children.length === 0 && /^(Сотрудник|Учитель)$/i.test(clean(e.textContent)));
+      if (cat) {
+        const prev = cat.previousElementSibling;
+        if (prev && good(clean(prev.textContent))) return clean(prev.textContent);
       }
+
       return '';
     }).catch(() => '');
+  }
+
+  // Ism bazada bo'lmasa, ochiq sahifadan olamiz
+  async fetchNameIfNeeded() {
+    try {
+      if (!/emaktab\.uz/.test(this.page.url())) return '';
+      return await this.getUserName();
+    } catch { return ''; }
   }
 
   // ---- 1-qadam: fayl ----

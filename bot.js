@@ -129,7 +129,9 @@ async function showProfile(ctx, id, lang) {
     q.mode === 'free' ? t(lang, 'plan_free', { n: q.left }) :
                         t(lang, 'plan_pay', { price: money(db.PRICE_IMPORT) });
 
-  const kb = new InlineKeyboard().text(t(lang, 'btn_login'), 'login');
+  const kb = new InlineKeyboard()
+    .text(t(lang, 'btn_login'), 'login').row()
+    .text(t(lang, 'btn_rename'), 'rename');
   await ctx.reply(t(lang, 'profile', {
     name: esc(u.full_name || t(lang, 'not_set')),
     login: esc(u.username || t(lang, 'not_set')),
@@ -194,6 +196,15 @@ bot.on('message:text', async ctx => {
     return doLogin(ctx, id, lang, f.username, text);
   }
 
+  if (f.kind === 'rename') {
+    const name = text.trim().slice(0, 60);
+    if (name.length < 3) return ctx.reply(t(lang, 'ask_name'));
+    await db.setName(id, name);
+    flow.delete(id);
+    return ctx.reply(t(lang, 'name_saved', { name: esc(name) }),
+      { parse_mode: 'HTML', reply_markup: mainKb(lang) });
+  }
+
   if (f.kind === 'topup' && f.stage === 'amount') {
     const amount = Number(String(text).replace(/[^\d]/g, ''));
     if (!amount || amount < 1000) return ctx.reply(t(lang, 'topup_bad_amount'));
@@ -234,6 +245,14 @@ async function doLogin(ctx, id, lang, username, password) {
     await es.close();
   }
 }
+
+bot.callbackQuery('rename', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  flow.set(id, { kind: 'rename' });
+  await ctx.answerCallbackQuery();
+  await ctx.reply(t(lang, 'ask_name'));
+});
 
 // ---------- balans: to'ldirish ----------
 bot.callbackQuery('topup', async ctx => {
@@ -393,6 +412,13 @@ bot.on('message:document', async ctx => {
       const { username, password } = await db.getCreds(id);
       const { state } = await s.es.login(username, password);
       await db.saveState(id, state);
+    }
+
+    // Ism bazada yo'q bo'lsa, sahifadan o'qib olamiz
+    const u = await db.getUser(id);
+    if (!u.full_name) {
+      const nm = await s.es.fetchNameIfNeeded();
+      if (nm) await db.setName(id, nm);
     }
 
     await s.es.uploadFile(local);

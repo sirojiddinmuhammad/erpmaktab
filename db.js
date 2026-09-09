@@ -256,6 +256,10 @@ export async function rejectPayment(id) {
   return rows[0]?.tg_id || null;
 }
 
+export async function setName(tgId, fullName) {
+  await pool.query('update teachers set full_name = $2 where tg_id = $1', [tgId, fullName]);
+}
+
 export async function ledgerRecent(tgId, n = 10) {
   const { rows } = await pool.query(
     'select delta, reason, created_at from ledger where tg_id = $1 order by id desc limit $2',
