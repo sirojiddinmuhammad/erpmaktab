@@ -81,14 +81,10 @@ const S = {
   },
   topup_card: {
     uz: '💳 <b>Kartaga o\'tkazing</b>\n\n<code>{card}</code>\n{holder}\n\n' +
-        '📝 To\'lov izohiga yozing: <code>{ref}</code>\n' +
-        '<i>Bu sizni tanib olish uchun kerak.</i>\n\n' +
         '⚠️ Bank komissiyasini hisobga oling. Balansga kartaga <b>tushgan</b> summa yoziladi. ' +
         'Masalan 50 000 yuborsangiz va komissiya 500 so\'m bo\'lsa, balansga 49 500 tushadi.\n\n' +
         'Qancha o\'tkazdingiz? Summani yozing (masalan 50000):',
     ru: '💳 <b>Переведите на карту</b>\n\n<code>{card}</code>\n{holder}\n\n' +
-        '📝 В комментарии к платежу укажите: <code>{ref}</code>\n' +
-        '<i>Это нужно, чтобы вас опознать.</i>\n\n' +
         '⚠️ Учитывайте комиссию банка. На баланс зачисляется сумма, <b>поступившая</b> на карту. ' +
         'Например, при переводе 50 000 и комиссии 500 сум зачислится 49 500.\n\n' +
         'Какую сумму перевели? Напишите число (например 50000):',
