@@ -65,9 +65,10 @@ setInterval(() => {
     if (Date.now() - s.es.lastUsed > TIMEOUT) { s.es.close(); live.delete(id); }
 }, 60_000);
 
-async function notifyAdmin(text) {
+async function notifyAdmin(text, kb) {
   if (!ADMIN_ID) return;
-  await bot.api.sendMessage(ADMIN_ID, text, { parse_mode: 'HTML' })
+  await bot.api.sendMessage(ADMIN_ID, text,
+    { parse_mode: 'HTML', ...(kb ? { reply_markup: kb } : {}) })
     .catch(e => console.error('admin xabar:', e.message));
 }
 
@@ -160,19 +161,22 @@ async function showProfile(ctx, id, lang) {
 
 async function showBalance(ctx, id, lang) {
   const u = await db.getUser(id);
+  const linked = !!u.password_enc;
   const q = await db.checkQuota(id);
   const plan =
     q.mode === 'sub'  ? t(lang, 'plan_sub', { date: String(u.sub_until).slice(0, 10) }) :
     q.mode === 'free' ? t(lang, 'plan_free', { n: q.left }) : '';
 
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'btn_topup'), 'topup').text(t(lang, 'btn_history'), 'history').row()
-    .text(t(lang, 'btn_sub'), 'buysub');
+  const kb = new InlineKeyboard();
+  if (linked) kb.text(t(lang, 'btn_topup'), 'topup');
+  kb.text(t(lang, 'btn_history'), 'history').row();
+  if (linked) kb.text(t(lang, 'btn_sub'), 'buysub');
 
   await ctx.reply(t(lang, 'balance', {
     balance: money(u.balance), plan,
     price: money(db.PRICE_IMPORT), sub: money(db.PRICE_SUB),
-  }), { parse_mode: 'HTML', reply_markup: kb });
+  }) + (linked ? '' : `\n\n${t(lang, 'topup_need_login')}`),
+    { parse_mode: 'HTML', reply_markup: kb });
 }
 
 // ---------- matnli xabarlar ----------
@@ -232,9 +236,30 @@ bot.on('message:text', async (ctx, next) => {
   if (f.kind === 'topup' && f.stage === 'amount') {
     const amount = Number(String(text).replace(/[^\d]/g, ''));
     if (!amount || amount < 1000) return ctx.reply(t(lang, 'topup_bad_amount'));
+
+    const payId = await db.createPayment(id, amount, null);
     f.amount = amount;
+    f.payId = payId;
     f.stage = 'shot';
-    return ctx.reply(t(lang, 'topup_screenshot'));
+
+    const u = await db.getUser(id);
+    await notifyAdmin(
+      `🟡 <b>To'ldirish #${payId}</b> — skrinshot kutilmoqda\n` +
+      `${esc(u.full_name || '—')}\n${who(ctx.from)}\n` +
+      `Summa: <b>${money(amount)}</b> so'm\n` +
+      `<i>Kartaga tushgan haqiqiy summani qo'ying.</i>`,
+      payKb(payId)
+    );
+
+    return ctx.reply(t(lang, 'topup_wait_shot'), { parse_mode: 'HTML' });
+  }
+
+  // Admin boshqa summa kiritmoqda
+  if (f.kind === 'payamount' && id === ADMIN_ID) {
+    const amount = Number(String(text).replace(/[^\d]/g, ''));
+    if (!amount) return ctx.reply('Summani raqam bilan yozing.');
+    flow.delete(id);
+    return finishPayment(ctx, f.payId, amount);
   }
 });
 
@@ -256,14 +281,22 @@ async function doLogin(ctx, id, lang, username, password) {
   try {
     await es.launch();
     const { state, fullName } = await es.login(username, password);
-    await db.setCreds(id, username, password, fullName);
+    const link = await db.linkAccount(id, username, password, fullName);
     await db.saveState(id, state);
+
+    // Oldingi Telegram uzildi — unga xabar beramiz
+    for (const old of link.prevTgIds) {
+      const oldLang = await L(old);
+      await bot.api.sendMessage(old, t(oldLang, 'unlinked')).catch(() => {});
+    }
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       fullName ? t(lang, 'connected', { name: fullName }) : t(lang, 'connected_no'));
 
     await notifyAdmin(
-      `✅ <b>eMaktab ulandi</b>\n${esc(fullName || '—')}\n` +
-      `${who(ctx.from)}\nLogin: <code>${esc(username)}</code>`
+      `${link.isNew ? '✅ <b>Yangi eMaktab hisobi</b>' : '🔄 <b>Hisob qayta ulandi</b>'}\n` +
+      `${esc(fullName || '—')}\n${who(ctx.from)}\n` +
+      `Login: <code>${esc(username)}</code>` +
+      (link.prevTgIds.length ? `\n⚠️ Oldingi Telegram uzildi: ${link.prevTgIds.join(', ')}` : '')
     );
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
@@ -287,11 +320,22 @@ bot.callbackQuery('rename', async ctx => {
 bot.callbackQuery('topup', async ctx => {
   const id = ctx.from.id;
   const lang = await L(id);
-  flow.set(id, { kind: 'topup', stage: 'amount' });
   await ctx.answerCallbackQuery();
-  await ctx.reply(t(lang, 'topup_card', { card: CARD, holder: esc(CARD_HOLDER) }),
-    { parse_mode: 'HTML' });
+
+  if (!(await db.getCreds(id))) return ctx.reply(t(lang, 'topup_need_login'));
+
+  flow.set(id, { kind: 'topup', stage: 'amount' });
+  await ctx.reply(
+    t(lang, 'topup_card', { card: CARD, holder: esc(CARD_HOLDER), ref: id }),
+    { parse_mode: 'HTML' }
+  );
 });
+
+// Admin uchun to'lov tugmalari
+const payKb = payId => new InlineKeyboard()
+  .text('✅ Tasdiqlash', `pay:ok:${payId}`)
+  .text('✏️ Boshqa summa', `pay:edit:${payId}`).row()
+  .text('❌ Rad etish', `pay:no:${payId}`);
 
 bot.on('message:photo', async ctx => {
   const id = ctx.from.id;
@@ -300,35 +344,55 @@ bot.on('message:photo', async ctx => {
   if (f?.kind !== 'topup' || f.stage !== 'shot') return;
 
   const fileId = ctx.message.photo.at(-1).file_id;
-  const payId = await db.createPayment(id, f.amount, fileId);
+  await db.attachPhoto(f.payId, fileId);
+  const payId = f.payId;
+  const amount = f.amount;
   flow.delete(id);
 
   await ctx.reply(t(lang, 'topup_sent'), { reply_markup: mainKb(lang) });
 
   if (ADMIN_ID) {
     const u = await db.getUser(id);
-    const kb = new InlineKeyboard()
-      .text('✅ Tasdiqlash', `pay:ok:${payId}`)
-      .text('❌ Rad etish', `pay:no:${payId}`);
     await bot.api.sendPhoto(ADMIN_ID, fileId, {
-      caption: `💰 <b>To'ldirish so'rovi #${payId}</b>\n` +
-               `${esc(u.full_name || '—')} · @${ctx.from.username || id}\n` +
-               `Summa: <b>${money(f.amount)}</b> so'm`,
+      caption: `💰 <b>To'ldirish #${payId}</b>\n` +
+               `${esc(u.full_name || '—')}\n${who(ctx.from)}\n` +
+               `Summa: <b>${money(amount)}</b> so'm`,
       parse_mode: 'HTML',
-      reply_markup: kb,
+      reply_markup: payKb(payId),
     }).catch(e => console.error('admin xabar:', e.message));
   }
 });
 
-bot.callbackQuery(/^pay:(ok|no):(\d+)$/, async ctx => {
-  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery('Ruxsat yo\'q');
+// To'lovni yakunlash (tasdiqlash yoki boshqa summa bilan)
+async function finishPayment(ctx, payId, amount = null) {
+  const res = await db.approvePayment(payId, amount);
+  if (!res) return ctx.reply(`⚠️ #${payId} allaqachon ko'rilgan`);
+
+  await ctx.reply(
+    `✅ Tasdiqlandi #${payId}\n+${money(res.amount)} so'm · Balans: ${money(res.balance)}`
+  );
+
+  const lang = await L(res.tgId);
+  await bot.api.sendMessage(res.tgId,
+    t(lang, 'topup_ok', { amount: money(res.amount), balance: money(res.balance) }),
+    { reply_markup: mainKb(lang) }
+  ).catch(() => {});
+}
+
+bot.callbackQuery(/^pay:(ok|no|edit):(\d+)$/, async ctx => {
+  if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery("Ruxsat yo'q");
   const [, action, idStr] = ctx.match;
   const payId = Number(idStr);
   await ctx.answerCallbackQuery();
 
+  if (action === 'edit') {
+    flow.set(ADMIN_ID, { kind: 'payamount', payId });
+    return ctx.reply(`#${payId} — kartaga tushgan haqiqiy summani yozing:`);
+  }
+
   if (action === 'no') {
     const tgId = await db.rejectPayment(payId);
-    await ctx.editMessageCaption({ caption: `❌ Rad etildi (#${payId})` });
+    await ctx.reply(`❌ Rad etildi #${payId}`);
     if (tgId) {
       const lang = await L(tgId);
       await bot.api.sendMessage(tgId, t(lang, 'topup_rejected')).catch(() => {});
@@ -336,17 +400,7 @@ bot.callbackQuery(/^pay:(ok|no):(\d+)$/, async ctx => {
     return;
   }
 
-  const res = await db.approvePayment(payId);
-  if (!res) return ctx.editMessageCaption({ caption: `⚠️ #${payId} allaqachon ko'rilgan` });
-
-  await ctx.editMessageCaption({
-    caption: `✅ Tasdiqlandi (#${payId})\n+${money(res.amount)} so'm · Balans: ${money(res.balance)}`,
-  });
-  const lang = await L(res.tgId);
-  await bot.api.sendMessage(res.tgId,
-    t(lang, 'topup_ok', { amount: money(res.amount), balance: money(res.balance) }),
-    { reply_markup: mainKb(lang) }
-  ).catch(() => {});
+  return finishPayment(ctx, payId);
 });
 
 bot.callbackQuery('history', async ctx => {

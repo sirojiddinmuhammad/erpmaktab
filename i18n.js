@@ -57,6 +57,10 @@ const S = {
   checking:     { uz: 'Tekshirilyapti...', ru: 'Проверяем...' },
   connected:    { uz: '✅ Ulandi: {name}', ru: '✅ Подключено: {name}' },
   connected_no: { uz: '✅ Ulandi.', ru: '✅ Подключено.' },
+  unlinked: {
+    uz: '⚠️ eMaktab hisobingiz boshqa Telegram akkauntga ulandi. Bu yerda import ishlamaydi.',
+    ru: '⚠️ Ваш аккаунт eMaktab подключён к другому Telegram. Здесь импорт работать не будет.',
+  },
   bad_creds:    { uz: "❌ Login yoki parol noto'g'ri.", ru: '❌ Неверный логин или пароль.' },
   need_login:   { uz: 'Avval "👤 Profil" dan eMaktab hisobingizni ulang.', ru: 'Сначала подключите аккаунт eMaktab в "👤 Профиль".' },
 
@@ -76,8 +80,26 @@ const S = {
     ru: '💳 <b>Баланс</b>\n\n{balance} сум\n{plan}\n\n1 импорт = {price} сум\nГодовая подписка = {sub} сум',
   },
   topup_card: {
-    uz: '💳 Quyidagi kartaga o\'tkazing:\n\n<code>{card}</code>\n{holder}\n\nQancha o\'tkazdingiz? Summani yozing (masalan 50000):',
-    ru: '💳 Переведите на карту:\n\n<code>{card}</code>\n{holder}\n\nКакую сумму перевели? Напишите число (например 50000):',
+    uz: '💳 <b>Kartaga o\'tkazing</b>\n\n<code>{card}</code>\n{holder}\n\n' +
+        '📝 To\'lov izohiga yozing: <code>{ref}</code>\n' +
+        '<i>Bu sizni tanib olish uchun kerak.</i>\n\n' +
+        '⚠️ Bank komissiyasini hisobga oling. Balansga kartaga <b>tushgan</b> summa yoziladi. ' +
+        'Masalan 50 000 yuborsangiz va komissiya 500 so\'m bo\'lsa, balansga 49 500 tushadi.\n\n' +
+        'Qancha o\'tkazdingiz? Summani yozing (masalan 50000):',
+    ru: '💳 <b>Переведите на карту</b>\n\n<code>{card}</code>\n{holder}\n\n' +
+        '📝 В комментарии к платежу укажите: <code>{ref}</code>\n' +
+        '<i>Это нужно, чтобы вас опознать.</i>\n\n' +
+        '⚠️ Учитывайте комиссию банка. На баланс зачисляется сумма, <b>поступившая</b> на карту. ' +
+        'Например, при переводе 50 000 и комиссии 500 сум зачислится 49 500.\n\n' +
+        'Какую сумму перевели? Напишите число (например 50000):',
+  },
+  topup_need_login: {
+    uz: 'Balansni to\'ldirishdan oldin "👤 Profil" dan eMaktab hisobingizni ulang.',
+    ru: 'Перед пополнением подключите аккаунт eMaktab в разделе "👤 Профиль".',
+  },
+  topup_wait_shot: {
+    uz: '✅ Qabul qilindi. Endi chek skrinshotini yuboring.',
+    ru: '✅ Принято. Теперь отправьте скриншот чека.',
   },
   topup_bad_amount: { uz: "Summani raqam bilan yozing, masalan: 50000", ru: 'Напишите сумму числом, например: 50000' },
   topup_screenshot: { uz: 'Endi chek skrinshotini yuboring.', ru: 'Теперь отправьте скриншот чека.' },
