@@ -682,6 +682,9 @@ async function submitAndPreview(ctx, id, lang) {
     ...r,
     ok: typeof r.ok === 'boolean' ? r.ok : /Готов|Tayyor/i.test(r.status || ''),
   }));
+  // Diagnostika: xato qatorlarning sababini logga yozamiz
+  for (const r of s.siteRows.filter(x => !x.ok))
+    console.log(`[xato qator] ${r.lesson}. ${r.topic} -> ${r.status}`);
   s.bad = s.siteRows.filter(r => !r.ok);
   s.ok = s.siteRows.length - s.bad.length;
   s.step = 'confirm';

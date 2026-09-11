@@ -404,14 +404,13 @@ export class EmaktabSession {
     const data = await this.page.evaluate(() => {
       const norm = t => (t || '').replace(/\s+/g, ' ').trim();
 
-      // Kerakli jadval: sarlavhasida "Тема урока" bo'lgani
       const table = [...document.querySelectorAll('table')]
         .find(t => /Тема\s*урока/i.test(t.textContent));
       if (!table) return { rows: [] };
 
       const trs = [...table.querySelectorAll('tr')];
 
-      // Sarlavha qatoridan ustun raqamlarini aniqlaymiz
+      // Sarlavhadan ustun raqamlarini olamiz
       let col = null;
       for (const tr of trs) {
         const cells = [...tr.querySelectorAll('th, td')].map(c => norm(c.textContent));
@@ -420,6 +419,7 @@ export class EmaktabSession {
             lesson: cells.findIndex(c => /№\s*урока/i.test(c)),
             topic:  cells.findIndex(c => /Тема\s*урока/i.test(c)),
             hw:     cells.findIndex(c => /Домашнее\s*задание/i.test(c)),
+            status: cells.findIndex(c => /Предварительная|проверк/i.test(c)),
           };
           break;
         }
@@ -432,35 +432,25 @@ export class EmaktabSession {
         if (!tds.length) continue;
 
         const cells = tds.map(c => norm(c.innerText));
-        if (!/^\d+$/.test(cells[0])) continue; // sarlavha yoki bo'sh qator
+        if (!/^\d+$/.test(cells[0])) continue;
 
-        // Holatni butun qator matnidan aniqlaymiz — ustun siljisa ham ishlaydi
-        const rowText = norm(tr.innerText);
-        const isError = /Ошибка|Xato/i.test(rowText);
-        const isOk = /Готов/i.test(rowText);
-
-        // Xato qatorda kataklar siljishi mumkin: mavzuni "Ошибка" so'zidan tozalaymiz
         const pick = i => (i >= 0 && i < cells.length ? cells[i] : '');
-        let topic = pick(col.topic);
-        let hw = pick(col.hw);
-        let lesson = pick(col.lesson);
 
-        if (isError) {
-          // Siljish bo'lsa: "Ошибка!" turgan katakni tashlab, keyingilarini olamiz
-          const ei = cells.findIndex(c => /^Ошибка/i.test(c));
-          if (ei !== -1 && ei <= col.topic) {
-            topic = norm(pick(col.topic).replace(/^Ошибка!?\.?/i, '')) || pick(col.topic + 1);
-            if (/^Ошибка/i.test(lesson) || !/^\d+$/.test(lesson)) lesson = '';
-          }
-        }
+        // MUHIM: holat faqat o'z ustunidan o'qiladi.
+        // Mavzu nomida "ошибками" kabi so'z bo'lishi mumkin — u xato emas.
+        const statusCell = col.status !== -1 ? pick(col.status) : cells.at(-1);
+        const isOk = /Готов/i.test(statusCell);
+        const isError = !isOk && /Ошибк|Xato/i.test(statusCell);
+
+        const lesson = pick(col.lesson);
 
         rows.push({
           n: cells[0],
           lesson: /^\d+$/.test(lesson) ? lesson : cells[0],
-          topic,
-          hw,
-          ok: isOk && !isError,
-          status: isError ? 'Xato' : (isOk ? 'Tayyor' : 'Nomalum'),
+          topic: pick(col.topic),
+          hw: pick(col.hw),
+          ok: isOk,
+          status: statusCell || (isError ? 'Xato' : ''),
         });
       }
       return { rows };
