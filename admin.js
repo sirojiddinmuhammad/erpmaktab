@@ -32,11 +32,18 @@ export function panelKb() {
 
 const hasSub = r => r.sub_until && new Date(r.sub_until) >= new Date();
 
-// "⭐💰 Ism · 12 000"
-function accLine(r) {
+// Ro'yxat turiga qarab oxirgi ustun o'zgaradi
+function accLine(r, key) {
   const marks = (hasSub(r) ? '⭐' : '') + (r.balance > 0 ? '💰' : '');
   const name = esc(r.full_name || r.login);
-  return `${marks || '·'} ${name} · ${money(r.balance)}`;
+
+  let tail = '';
+  if (key === 'imported')      tail = ` · ${r.imports_ok} ta`;
+  else if (key === 'subs')     tail = ` · ${String(r.sub_until).slice(0, 10)}`;
+  else if (key === 'money')    tail = ` · ${money(r.balance)}`;
+  else if (key === 'linked')   tail = ` · ${r.imports_ok} ta`;
+
+  return `${marks || '·'} ${name}${tail}`;
 }
 
 function idleLine(r) {
@@ -57,7 +64,7 @@ export async function showList(ctx, key, offset, edit = false) {
   const page = Math.floor(offset / PAGE) + 1;
 
   const body = rows.length
-    ? rows.map(meta.kind === 'idle' ? idleLine : accLine).join('\n')
+    ? rows.map(r => (meta.kind === 'idle' ? idleLine(r) : accLine(r, key))).join('\n')
     : '—';
 
   const text = `${meta.title} · ${total} ta\n\n${body}`;
