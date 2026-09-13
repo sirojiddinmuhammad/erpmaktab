@@ -5,6 +5,10 @@ const clean = v => String(v ?? '')
   .replace(/\s+/g, ' ')
   .trim();
 
+// Ustun nomlari: rus, o'zbek lotin va kirill
+const RE_TOPIC = /(тема|mavzu|мавзу)/i;
+const RE_HW    = /(дом|задани|vazifa|вазифа|topshiriq|топшириқ)/i;
+
 // Faylni o'qib [{topic, hw}] ro'yxatiga aylantiradi. 1-qator sarlavha.
 export async function readRows(path) {
   const wb = new ExcelJS.Workbook();
@@ -12,12 +16,22 @@ export async function readRows(path) {
   const ws = wb.worksheets[0];
   if (!ws) throw new Error('Faylda varaq topilmadi.');
 
+  // Sarlavha qatoridan ustunlarni topamiz
+  let cTopic = 2, cHw = 3;
+  const head = ws.getRow(1);
+  for (let c = 1; c <= Math.max(ws.columnCount, 5); c++) {
+    const h = clean(head.getCell(c).text);
+    if (!h) continue;
+    if (RE_TOPIC.test(h)) cTopic = c;
+    else if (RE_HW.test(h)) cHw = c;
+  }
+
   const rows = [];
   ws.eachRow((row, i) => {
     if (i === 1) return; // sarlavha
-    const topic = clean(row.getCell(2).text);
+    const topic = clean(row.getCell(cTopic).text);
     if (!topic) return;
-    rows.push({ topic, hw: clean(row.getCell(3).text) });
+    rows.push({ topic, hw: clean(row.getCell(cHw).text) });
   });
 
   if (!rows.length) throw new Error("Faylda mavzu topilmadi.");

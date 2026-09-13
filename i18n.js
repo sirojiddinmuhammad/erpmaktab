@@ -101,6 +101,14 @@ const S = {
   topup_screenshot: { uz: 'Endi chek skrinshotini yuboring.', ru: 'Теперь отправьте скриншот чека.' },
   topup_sent:       { uz: "✅ So'rov yuborildi. Tasdiqlangach xabar beramiz.", ru: '✅ Заявка отправлена. Сообщим после подтверждения.' },
   topup_ok:         { uz: '✅ Balans to\'ldirildi: +{amount} so\'m\nJoriy balans: {balance} so\'m', ru: '✅ Баланс пополнен: +{amount} сум\nТекущий баланс: {balance} сум' },
+  admin_added: {
+    uz: '✅ Balansingizga {amount} so\'m qo\'shildi.\nJoriy balans: {balance} so\'m',
+    ru: '✅ На ваш баланс зачислено {amount} сум.\nТекущий баланс: {balance} сум',
+  },
+  admin_removed: {
+    uz: 'ℹ️ Balansingizdan {amount} so\'m yechildi.\nJoriy balans: {balance} so\'m',
+    ru: 'ℹ️ С вашего баланса списано {amount} сум.\nТекущий баланс: {balance} сум',
+  },
   topup_rejected:   { uz: "❌ To'lov tasdiqlanmadi. Savol bo'lsa admin bilan bog'laning.", ru: '❌ Платёж не подтверждён. Свяжитесь с админом.' },
   history_empty:    { uz: 'Hozircha amaliyot yo\'q.', ru: 'Пока операций нет.' },
   history:          { uz: '📜 <b>Oxirgi amaliyotlar</b>\n\n{rows}', ru: '📜 <b>Последние операции</b>\n\n{rows}' },

@@ -3,12 +3,25 @@ import { chromium } from 'playwright';
 const BASE = 'https://schools.emaktab.uz';
 const IMPORT_URL = `${BASE}/v2/journals/planning/import`;
 
-// Fayldagi ustun nomi -> eMaktabdagi maydon
-const COLUMN_MAP = {
-  'П/Н': 'Номер урока',
-  'Тема': 'Тема урока',
-  'Дом. Задания': 'Домашнее задание',
-};
+// Fayldagi ustun nomi uchun shablonlar -> eMaktabdagi maydon.
+// Rus, o'zbek lotin va kirill variantlari qamrab olingan.
+const COLUMN_RULES = [
+  {
+    target: 'Номер урока',
+    re: /^\s*(п\s*\/?\s*н|№|n|nn|t\s*\/?\s*r|т\s*\/?\s*р|тартиб|tartib|дарс\s*раками|dars\s*raqami|номер|raqam|raqami|рақам|рақами)\s*$/i,
+  },
+  {
+    target: 'Тема урока',
+    re: /(тема|mavzu|мавзу|dars\s*mavzu|тема\s*урока)/i,
+  },
+  {
+    target: 'Домашнее задание',
+    re: /(дом|задани|uy\s*vazifa|уй\s*вазифа|vazifa|вазифа|topshiriq|топшириқ)/i,
+  },
+];
+
+// Eski kod uchun moslik (mapColumns ichida ishlatiladi)
+const COLUMN_MAP = Object.fromEntries(COLUMN_RULES.map(r => [r.target, r.target]));
 
 // Bitta brauzer hammaga xizmat qiladi, har foydalanuvchiga alohida context.
 // Har safar yangi brauzer ochish 2-4 soniya olardi.
@@ -272,16 +285,16 @@ export class EmaktabSession {
 
   // ---- ustun mosligi: avtomatik ----
   async mapColumns() {
-    // Moslash selectlarida albatta "Номер урока" varianti bor.
-    // Shu belgi bilan ularni parametr selectlaridan (sinf, fan) ajratamiz.
     await this.page.waitForFunction(() =>
       [...document.querySelectorAll('select')].some(s =>
         [...s.options].some(o => /номер\s*урока/i.test(o.textContent))
       ), null, { timeout: 30000 }
     ).catch(() => {});
 
-    const plan = await this.page.evaluate((MAP) => {
-      const norm = t => (t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const rules = COLUMN_RULES.map(r => ({ target: r.target, src: r.re.source, flags: r.re.flags }));
+
+    const plan = await this.page.evaluate(({ rules }) => {
+      const norm = t => (t || '').replace(/\s+/g, ' ').trim();
       const all = [...document.querySelectorAll('select')];
 
       const mapping = all
@@ -289,74 +302,66 @@ export class EmaktabSession {
         .filter(({ sel }) => [...sel.options].some(o => /номер\s*урока/i.test(o.textContent)));
 
       if (!mapping.length) {
-        return {
-          actions: [],
-          report: [`Moslash selectlari topilmadi. Sahifada ${all.length} ta select bor.`],
-        };
+        return { actions: [], report: [`Moslash selectlari topilmadi. Sahifada ${all.length} ta select bor.`] };
       }
 
-      // Selectning qatoridagi ustun nomini o'qish
       const labelOf = sel => {
         const tr = sel.closest('tr');
         if (tr) {
           for (const c of [...tr.querySelectorAll('td, th')])
-            if (!c.querySelector('select')) return c.textContent;
+            if (!c.querySelector('select')) return norm(c.textContent);
         }
         let n = sel.parentElement;
         for (let i = 0; i < 3 && n; i++, n = n.parentElement) {
-          const t = n.textContent.replace(sel.textContent, '').trim();
+          const t = norm(n.textContent.replace(sel.textContent, ''));
           if (t) return t;
         }
         return '';
       };
 
-      const cols = Object.keys(MAP);
       const actions = [];
       const report = [];
       const used = new Set();
 
-      for (let ci = 0; ci < cols.length; ci++) {
-        const fileCol = cols[ci];
-        const target = MAP[fileCol];
+      // 1) Har bir moslash selectining qator nomini shablonlarga solishtiramiz
+      for (const m of mapping) {
+        const label = labelOf(m.sel);
+        const rule = rules.find(r => new RegExp(r.src, r.flags).test(label));
+        if (!rule) continue;
 
-        // 1) qator nomi bo'yicha, 2) topilmasa tartib bo'yicha
-        let hit = mapping.find(m => !used.has(m.idx) && norm(labelOf(m.sel)).includes(norm(fileCol)));
-        if (!hit && mapping[ci] && !used.has(mapping[ci].idx)) hit = mapping[ci];
-        if (!hit) { report.push(`${fileCol}: mos select yo'q`); continue; }
+        const opts = [...m.sel.options];
+        let oi = opts.findIndex(o => norm(o.textContent).toLowerCase() === rule.target.toLowerCase());
+        if (oi === -1) oi = opts.findIndex(o => norm(o.textContent).toLowerCase().includes(rule.target.toLowerCase()));
+        if (oi === -1) { report.push(`${label}: "${rule.target}" varianti yo'q`); continue; }
 
-        const opts = [...hit.sel.options];
-        let oi = opts.findIndex(o => norm(o.textContent) === norm(target));
-        if (oi === -1) oi = opts.findIndex(o => norm(o.textContent).includes(norm(target)));
-        if (oi === -1) {
-          report.push(`${fileCol}: "${target}" yo'q. Bor: ${opts.map(o => o.textContent.trim()).join(' | ')}`);
-          continue;
-        }
-
-        used.add(hit.idx);
-        actions.push({ selectIndex: hit.idx, optionIndex: oi });
-        report.push(`${fileCol} -> ${target}`);
+        used.add(m.idx);
+        actions.push({ selectIndex: m.idx, optionIndex: oi });
+        report.push(`${label} -> ${rule.target}`);
       }
+
+      // 2) Topilmaganlarni tartib bo'yicha to'ldiramiz (raqam, mavzu, vazifa)
+      if (actions.length < Math.min(3, mapping.length)) {
+        const order = ['Номер урока', 'Тема урока', 'Домашнее задание'];
+        mapping.forEach((m, i) => {
+          if (used.has(m.idx) || i >= order.length) return;
+          const opts = [...m.sel.options];
+          const oi = opts.findIndex(o => norm(o.textContent).toLowerCase().includes(order[i].toLowerCase()));
+          if (oi === -1) return;
+          used.add(m.idx);
+          actions.push({ selectIndex: m.idx, optionIndex: oi });
+          report.push(`${labelOf(m.sel) || `#${i + 1}`} -> ${order[i]} (tartib bo'yicha)`);
+        });
+      }
+
       return { actions, report };
-    }, COLUMN_MAP);
+    }, { rules });
 
     for (const a of plan.actions) {
       await this.page.locator('select').nth(a.selectIndex).selectOption({ index: a.optionIndex });
     }
 
     this.lastMapReport = plan.report.join('\n');
-    // Uchalasi ham qo'yilmasa — qo'lda rejimga o'tamiz
-    return { done: plan.actions.length, need: Object.keys(COLUMN_MAP).length, report: this.lastMapReport };
-  }
-
-  // Oldin tanlangan parametrlarni qayta qo'yadi (qayta yuklashdan keyin)
-  async applyParams(list) {
-    for (const { label, optionLabel } of list) {
-      const opts = await this.options(label);
-      const hit = opts.find(o => o.label === optionLabel)
-               || opts.find(o => o.label.includes(optionLabel));
-      if (!hit) throw new Error(`"${optionLabel}" varianti qayta topilmadi (${label}).`);
-      await this.pick(label, hit.index);
-    }
+    return { done: plan.actions.length, need: 3, report: this.lastMapReport };
   }
 
   // Qo'lda moslash uchun: moslash selectlari va ularning variantlari

@@ -321,12 +321,92 @@ export async function rejectPayment(id) {
   return rows[0]?.tg_id || null;
 }
 
+// Rad etilgan to'lovni qayta ochish
+export async function undoReject(id) {
+  const { rows } = await pool.query(
+    "update payments set status='pending', decided_at=null where id=$1 and status='rejected' returning id",
+    [id]);
+  return rows[0] || null;
+}
+
 export async function ledgerRecent(tgId, n = 10) {
   const { rows } = await pool.query(
     `select l.delta, l.reason, l.created_at from ledger l
        join users u on u.account_id = l.account_id
       where u.tg_id = $1 order by l.id desc limit $2`, [tgId, n]);
   return rows;
+}
+
+// ---------- admin ro'yxatlari ----------
+const LIST_SQL = {
+  subs: `select a.full_name, a.login, a.balance, a.sub_until, a.imports_ok, a.tg_id
+           from accounts a where a.sub_until >= current_date
+          order by a.sub_until asc`,
+  money: `select a.full_name, a.login, a.balance, a.sub_until, a.imports_ok, a.tg_id
+            from accounts a where a.balance > 0 order by a.balance desc`,
+  linked: `select a.full_name, a.login, a.balance, a.sub_until, a.imports_ok, a.tg_id
+             from accounts a order by a.created_at desc`,
+  imported: `select a.full_name, a.login, a.balance, a.sub_until, a.imports_ok, a.tg_id
+               from accounts a where a.imports_ok > 0 order by a.imports_ok desc`,
+};
+
+export async function listAccounts(kind, offset = 0, limit = 30) {
+  const sql = LIST_SQL[kind];
+  if (!sql) return { rows: [], total: 0 };
+  const { rows } = await pool.query(`${sql} limit $1 offset $2`, [limit, offset]);
+  const { rows: c } = await pool.query(`select count(*) from (${sql}) x`);
+  return { rows, total: Number(c[0].count) };
+}
+
+// /start bosgan, lekin hisob ulamaganlar
+export async function listIdle(offset = 0, limit = 30) {
+  const sql = `select u.tg_id, u.created_at from users u
+                where u.account_id is null order by u.created_at desc`;
+  const { rows } = await pool.query(`${sql} limit $1 offset $2`, [limit, offset]);
+  const { rows: c } = await pool.query(`select count(*) from (${sql}) x`);
+  return { rows, total: Number(c[0].count) };
+}
+
+export async function searchAccounts(q, limit = 10) {
+  const { rows } = await pool.query(
+    `select a.*, u.tg_id as user_tg from accounts a
+       left join users u on u.account_id = a.id
+      where a.login ilike $1 or coalesce(a.full_name,'') ilike $1
+         or a.tg_id::text = $2
+      order by a.imports_ok desc limit $3`,
+    [`%${q}%`, q.replace(/\D/g, '') || '0', limit]
+  );
+  return rows;
+}
+
+export async function findByLogin(login) {
+  const { rows } = await pool.query('select * from accounts where login = $1', [login]);
+  return rows[0] || null;
+}
+
+// Admin qo'lda balans qo'shadi (manfiy son — yechadi)
+export async function adminAdjust(login, delta) {
+  const { rows } = await pool.query(
+    `update accounts set balance = greatest(0, balance + $2)
+      where login = $1 returning id, tg_id, balance`, [login, delta]);
+  if (!rows[0]) return null;
+  await pool.query(
+    'insert into ledger (account_id, tg_id, delta, reason) values ($1,$2,$3,$4)',
+    [rows[0].id, rows[0].tg_id, delta, 'admin']);
+  return rows[0];
+}
+
+// Xabar yuborish uchun qabul qiluvchilar
+export async function recipients(kind) {
+  const sql = {
+    all:      `select tg_id from users where tg_id is not null`,
+    linked:   `select tg_id from accounts where tg_id is not null`,
+    subs:     `select tg_id from accounts where sub_until >= current_date and tg_id is not null`,
+    money:    `select tg_id from accounts where balance > 0 and tg_id is not null`,
+  }[kind];
+  if (!sql) return [];
+  const { rows } = await pool.query(sql);
+  return rows.map(r => Number(r.tg_id));
 }
 
 // ---------- hisobot ----------
@@ -353,9 +433,13 @@ export async function stats() {
 
   const pay = await q(`select coalesce(sum(amount),0) as total from payments where status='approved'`);
 
+  const soon = await q(`
+    select count(*) as n from accounts
+     where sub_until >= current_date and sub_until <= current_date + 30`);
+
   const { rows: top } = await pool.query(`
     select coalesce(full_name, login) as name, imports_ok
       from accounts where imports_ok > 0 order by imports_ok desc limit 5`);
 
-  return { users: { ...users, ...acc }, imp, pay, top };
+  return { users: { ...users, ...acc }, imp, pay, top, soon: soon.n };
 }

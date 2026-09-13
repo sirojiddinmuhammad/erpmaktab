@@ -12,6 +12,7 @@ import { readRows, writeRows, parsePairs, applyMerges } from './xlsx.js';
 import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
 import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
+import * as admin from './admin.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
@@ -254,6 +255,59 @@ bot.on('message:text', async (ctx, next) => {
     return ctx.reply(t(lang, 'topup_wait_shot'), { parse_mode: 'HTML' });
   }
 
+  if (id === ADMIN_ID && f.kind === 'asearch') {
+    flow.delete(id);
+    return admin.showSearch(ctx, text.trim());
+  }
+
+  if (id === ADMIN_ID && f.kind === 'adj_login') {
+    const acc = await db.findByLogin(text.trim());
+    if (!acc) return ctx.reply("Bunday login topilmadi. Qaytadan yozing.");
+    flow.set(id, { kind: 'adj_sum', login: acc.login, name: acc.full_name });
+    return ctx.reply(
+      `${esc(acc.full_name || acc.login)}\nJoriy balans: ${money(acc.balance)} so'm\n\n` +
+      `Qancha qo'shamiz? (yechish uchun manfiy son, masalan -20000)`,
+      { parse_mode: 'HTML' }
+    );
+  }
+
+  if (id === ADMIN_ID && f.kind === 'adj_sum') {
+    const delta = Number(String(text).replace(/[^\d-]/g, ''));
+    if (!delta) return ctx.reply('Summani raqam bilan yozing.');
+    flow.delete(id);
+
+    const r = await db.adminAdjust(f.login, delta);
+    if (!r) return ctx.reply('Xatolik: hisob topilmadi.');
+
+    await ctx.reply(
+      `✅ ${esc(f.name || f.login)}\n${delta > 0 ? '+' : ''}${money(delta)} so'm\n` +
+      `Yangi balans: ${money(r.balance)} so'm`,
+      { parse_mode: 'HTML', reply_markup: admin.panelKb() }
+    );
+
+    if (r.tg_id) {
+      const ul = await L(r.tg_id);
+      await bot.api.sendMessage(r.tg_id,
+        t(ul, delta > 0 ? 'admin_added' : 'admin_removed',
+          { amount: money(Math.abs(delta)), balance: money(r.balance) }),
+        { reply_markup: mainKb(ul) }).catch(() => {});
+    }
+    return;
+  }
+
+  if (id === ADMIN_ID && f.kind === 'bctext') {
+    const ids = await db.recipients(f.audience);
+    f.text = text;
+    return ctx.reply(
+      `✉️ <b>${admin.audienceName(f.audience)}</b> · ${ids.length} ta\n\n${text}`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text('✅ Yuborish', 'a:bcgo').text('❌ Bekor', 'a:panel'),
+      }
+    );
+  }
+
   // Admin boshqa summa kiritmoqda
   if (f.kind === 'payamount' && id === ADMIN_ID) {
     const amount = Number(String(text).replace(/[^\d]/g, ''));
@@ -379,11 +433,17 @@ async function finishPayment(ctx, payId, amount = null) {
   ).catch(() => {});
 }
 
-bot.callbackQuery(/^pay:(ok|no|edit):(\d+)$/, async ctx => {
+bot.callbackQuery(/^pay:(ok|no|edit|undo):(\d+)$/, async ctx => {
   if (ctx.from.id !== ADMIN_ID) return ctx.answerCallbackQuery("Ruxsat yo'q");
   const [, action, idStr] = ctx.match;
   const payId = Number(idStr);
   await ctx.answerCallbackQuery();
+
+  if (action === 'undo') {
+    const r = await db.undoReject(payId);
+    if (!r) return ctx.reply(`⚠️ #${payId} qaytarib bo'lmadi.`);
+    return finishPayment(ctx, payId);
+  }
 
   if (action === 'edit') {
     flow.set(ADMIN_ID, { kind: 'payamount', payId });
@@ -392,7 +452,9 @@ bot.callbackQuery(/^pay:(ok|no|edit):(\d+)$/, async ctx => {
 
   if (action === 'no') {
     const tgId = await db.rejectPayment(payId);
-    await ctx.reply(`❌ Rad etildi #${payId}`);
+    await ctx.reply(`❌ Rad etildi #${payId}`, {
+      reply_markup: new InlineKeyboard().text('↩️ Qaytarish', `pay:undo:${payId}`),
+    });
     if (tgId) {
       const lang = await L(tgId);
       await bot.api.sendMessage(tgId, t(lang, 'topup_rejected')).catch(() => {});
@@ -853,33 +915,57 @@ bot.callbackQuery('go', async ctx => {
   }
 });
 
-// ---------- admin hisoboti ----------
-bot.command('stats', async ctx => {
-  if (ctx.from.id !== ADMIN_ID) return;
-  const { users, imp, pay, top } = await db.stats();
+// ---------- admin paneli ----------
+const isAdmin = ctx => ctx.from?.id === ADMIN_ID;
 
-  const topList = top.length
-    ? top.map((r, i) => `${i + 1}. ${esc(r.name)} — ${r.imports_ok} ta`).join('\n')
-    : '—';
+bot.command('admin', async ctx => {
+  if (!isAdmin(ctx)) return;
+  await ctx.reply('🛠 <b>Admin panel</b>', { parse_mode: 'HTML', reply_markup: admin.panelKb() });
+});
+bot.command('stats', async ctx => { if (isAdmin(ctx)) await admin.showStats(ctx); });
 
-  await ctx.reply(
-    `📊 <b>Hisobot</b>\n\n` +
-    `👥 <b>Foydalanuvchilar</b>\n` +
-    `Jami: ${users.total}\n` +
-    `eMaktab ulangan: ${users.linked}\n` +
-    `Import qilgan: ${users.active}\n` +
-    `Bugun qo'shildi: ${users.today}\n\n` +
-    `📤 <b>Importlar</b>\n` +
-    `Bugun: ${imp.today}\n` +
-    `7 kunda: ${imp.week}\n` +
-    `Jami: ${users.imports_total}\n\n` +
-    `💰 <b>Pul</b>\n` +
-    `Balanslarda: ${money(users.balances)} so'm\n` +
-    `Jami to'lovlar: ${money(pay.total)} so'm\n` +
-    `Obunachilar: ${users.subs} ta\n\n` +
-    `🏆 <b>Eng faollar</b>\n${topList}`,
-    { parse_mode: 'HTML' }
-  );
+bot.callbackQuery(/^a:(.+)$/, async ctx => {
+  if (!isAdmin(ctx)) return ctx.answerCallbackQuery("Ruxsat yo'q");
+  const parts = ctx.match[1].split(':');
+  const cmd = parts[0];
+  await ctx.answerCallbackQuery();
+
+  if (cmd === 'noop') return;
+
+  if (cmd === 'panel')
+    return ctx.reply('🛠 <b>Admin panel</b>', { parse_mode: 'HTML', reply_markup: admin.panelKb() });
+
+  if (cmd === 'stats') return admin.showStats(ctx);
+
+  if (cmd === 'l') return admin.showList(ctx, parts[1], Number(parts[2]) || 0, true);
+  if (cmd === 'f') return admin.sendListFile(ctx, parts[1]);
+
+  if (cmd === 'search') {
+    flow.set(ADMIN_ID, { kind: 'asearch' });
+    return ctx.reply("🔍 Ism, login yoki Telegram ID ni yozing:");
+  }
+
+  if (cmd === 'adj') {
+    flow.set(ADMIN_ID, { kind: 'adj_login' });
+    return ctx.reply('➕ eMaktab loginini yozing:');
+  }
+
+  if (cmd === 'msg') {
+    return ctx.reply('✉️ Kimga yuboramiz?', { reply_markup: admin.audienceKb() });
+  }
+
+  if (cmd === 'aud') {
+    flow.set(ADMIN_ID, { kind: 'bctext', audience: parts[1] });
+    return ctx.reply(`✉️ <b>${admin.audienceName(parts[1])}</b>\n\nXabar matnini yozing:`,
+      { parse_mode: 'HTML' });
+  }
+
+  if (cmd === 'bcgo') {
+    const f = flow.get(ADMIN_ID);
+    if (!f?.text) return ctx.reply('Matn topilmadi, qaytadan boshlang.');
+    flow.delete(ADMIN_ID);
+    return admin.broadcast(bot, ctx, f.audience, f.text);
+  }
 });
 
 // ---------- qo'llanma (Telegram Mini App) ----------
