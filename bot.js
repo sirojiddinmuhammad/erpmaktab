@@ -147,18 +147,74 @@ async function showProfile(ctx, id, lang) {
     q.mode === 'free' ? t(lang, 'plan_free', { n: q.left }) :
                         t(lang, 'plan_pay', { price: money(db.PRICE_IMPORT) });
 
-  const kb = new InlineKeyboard()
-    .text(t(lang, 'btn_login'), 'login').row()
-    .text(t(lang, 'btn_rename'), 'rename');
-  await ctx.reply(t(lang, 'profile', {
+  const kb = new InlineKeyboard().text(t(lang, 'btn_login'), 'login');
+  if (u.password_enc) kb.row().text(t(lang, 'btn_refresh_classes'), 'refclass');
+  const body = t(lang, 'profile', {
     name: esc(u.full_name || t(lang, 'not_set')),
     login: esc(u.username || t(lang, 'not_set')),
     lang: LANG_NAME[lang],
     balance: money(u.balance),
     plan,
     imports: u.imports_ok || 0,
-  }), { parse_mode: 'HTML', reply_markup: kb });
+  }) + classesBlock(u.classes, lang);
+
+  await ctx.reply(body, { parse_mode: 'HTML', reply_markup: kb });
 }
+
+// Bir xil fanlar to'plamiga ega sinflar birlashtiriladi
+function classesBlock(classes, lang) {
+  if (!Array.isArray(classes) || !classes.length) return '';
+
+  const groups = new Map();
+  for (const c of classes) {
+    const key = (c.subjects || []).join('|');
+    if (!groups.has(key)) groups.set(key, { subjects: c.subjects || [], list: [] });
+    groups.get(key).list.push(c.cls);
+  }
+
+  // Fani ko'p bo'lgan blok tepada
+  const blocks = [...groups.values()]
+    .sort((a, b) => b.subjects.length - a.subjects.length)
+    .map(g => `<b>${esc(g.list.join(', '))}</b>\n${esc(g.subjects.join(', '))}`);
+
+  return `\n\n${t(lang, 'my_classes')}\n\n${blocks.join('\n\n')}`;
+}
+
+bot.callbackQuery('refclass', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  await ctx.answerCallbackQuery();
+
+  const creds = await db.getCreds(id);
+  if (!creds) return ctx.reply(t(lang, 'need_login'));
+
+  const wait = await ctx.reply(t(lang, 'checking'));
+  const es = new EmaktabSession();
+  try {
+    const saved = await db.getState(id);
+    let ok = saved ? await es.restore(saved) : false;
+    if (!ok) {
+      await es.close();
+      const es2 = new EmaktabSession();
+      await es2.launch();
+      const { state } = await es2.login(creds.username, creds.password);
+      await db.saveState(id, state);
+      const cls2 = await es2.fetchClasses();
+      await es2.close();
+      await db.setClasses(id, cls2);
+    } else {
+      const cls = await es.fetchClasses();
+      await db.setClasses(id, cls);
+    }
+    await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+    await showProfile(ctx, id, lang);
+  } catch (e) {
+    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
+      e.message === 'MAINTENANCE' ? t(lang, 'maintenance') : t(lang, 'error', { msg: e.message }));
+  } finally {
+    await es.close();
+  }
+});
 
 async function showBalance(ctx, id, lang) {
   const u = await db.getUser(id);
@@ -223,15 +279,6 @@ bot.on('message:text', async (ctx, next) => {
       return ctx.reply(t(lang, 'ask_password'));
     }
     return doLogin(ctx, id, lang, f.username, text);
-  }
-
-  if (f.kind === 'rename') {
-    const name = text.trim().slice(0, 60);
-    if (name.length < 3) return ctx.reply(t(lang, 'ask_name'));
-    await db.setName(id, name);
-    flow.delete(id);
-    return ctx.reply(t(lang, 'name_saved', { name: esc(name) }),
-      { parse_mode: 'HTML', reply_markup: mainKb(lang) });
   }
 
   if (f.kind === 'topup' && f.stage === 'amount') {
@@ -338,6 +385,10 @@ async function doLogin(ctx, id, lang, username, password) {
     const link = await db.linkAccount(id, username, password, fullName);
     await db.saveState(id, state);
 
+    // Sinf va fanlarni o'qib qo'yamiz
+    const classes = await es.fetchClasses();
+    if (classes.length) await db.setClasses(id, classes);
+
     // Oldingi Telegram uzildi — unga xabar beramiz
     for (const old of link.prevTgIds) {
       const oldLang = await L(old);
@@ -361,14 +412,6 @@ async function doLogin(ctx, id, lang, username, password) {
     await es.close();
   }
 }
-
-bot.callbackQuery('rename', async ctx => {
-  const id = ctx.from.id;
-  const lang = await L(id);
-  flow.set(id, { kind: 'rename' });
-  await ctx.answerCallbackQuery();
-  await ctx.reply(t(lang, 'ask_name'));
-});
 
 // ---------- balans: to'ldirish ----------
 bot.callbackQuery('topup', async ctx => {

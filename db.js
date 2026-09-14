@@ -56,6 +56,9 @@ create table if not exists accounts (
   created_at    timestamptz default now()
 );
 
+alter table accounts add column if not exists classes    jsonb;
+alter table accounts add column if not exists classes_at timestamptz;
+
 create table if not exists users (
   tg_id      bigint primary key,
   lang       text default 'uz',
@@ -118,7 +121,7 @@ export async function getUser(tgId) {
     `select u.tg_id, u.lang, u.account_id,
             a.login as username, a.full_name, a.password_enc,
             coalesce(a.balance,0) as balance, coalesce(a.free_used,0) as free_used,
-            a.sub_until, coalesce(a.imports_ok,0) as imports_ok
+            a.sub_until, coalesce(a.imports_ok,0) as imports_ok, a.classes
        from users u left join accounts a on a.id = u.account_id
       where u.tg_id = $1`,
     [tgId]
@@ -176,6 +179,20 @@ export async function getCreds(tgId) {
   const a = await accountOf(tgId);
   if (!a?.password_enc) return null;
   return { username: a.login, password: dec(a.password_enc) };
+}
+
+export async function setClasses(tgId, classes) {
+  await pool.query(
+    `update accounts set classes = $2, classes_at = now()
+      where id = (select account_id from users where tg_id = $1)`,
+    [tgId, JSON.stringify(classes)]);
+}
+
+export async function getClasses(tgId) {
+  const { rows } = await pool.query(
+    `select a.classes from users u join accounts a on a.id = u.account_id where u.tg_id = $1`,
+    [tgId]);
+  return rows[0]?.classes || null;
 }
 
 export async function setName(tgId, fullName) {

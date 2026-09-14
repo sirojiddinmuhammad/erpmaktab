@@ -238,12 +238,86 @@ export class EmaktabSession {
     }).catch(() => '');
   }
 
+  // "Мои классы" sahifasidan sinf va fanlarni o'qiydi.
+  // Natija: [{ cls: '4-А', subjects: ['Воспитание', ...] }]
+  async fetchClasses() {
+    await this.go(`${BASE}/v2/myclasses`);
+    await this.page.waitForSelector('#ContentPanelMyClasses', { timeout: 15000 }).catch(() => {});
+    await this.settle(400);
+
+    return await this.page.evaluate(() => {
+      const norm = t => (t || '').replace(/\s+/g, ' ').trim();
+      const out = [];
+
+      const panel = document.querySelector('#ContentPanelMyClasses') || document;
+      // Har bir sinf bloki .cc ichida. Topilmasa — sinf havolasidan yuqoriga chiqamiz.
+      let blocks = [...panel.querySelectorAll('.cc')];
+      if (!blocks.length) {
+        blocks = [...panel.querySelectorAll('a[href*="/v2/class?class="]')]
+          .map(a => a.closest('div'))
+          .filter(Boolean);
+      }
+
+      for (const b of blocks) {
+        const clsLink = b.querySelector('a[href*="/v2/class?class="]');
+        if (!clsLink) continue;
+
+        const cls = norm(clsLink.textContent);
+        if (!cls) continue;
+
+        // Fanlar: /subject/ havolalari. Nomi title'da aniqroq turadi.
+        const subjects = [...b.querySelectorAll('a[href*="/subject/"]')]
+          .map(a => norm(a.getAttribute('title') || a.textContent))
+          .filter(Boolean);
+
+        if (!subjects.length) continue;
+        if (out.some(o => o.cls === cls)) continue;
+
+        out.push({ cls, subjects: [...new Set(subjects)] });
+      }
+      return out;
+    }).catch(() => []);
+  }
+
   // Ism bazada bo'lmasa, ochiq sahifadan olamiz
   async fetchNameIfNeeded() {
     try {
       if (!/emaktab\.uz/.test(this.page.url())) return '';
       return await this.getUserName();
     } catch { return ''; }
+  }
+
+  // "Мои классы" sahifasidan sinf va fanlar ro'yxati
+  async getMyClasses() {
+    await this.go(`${BASE}/v2/myclasses`);
+    await this.settle(600);
+
+    return await this.page.evaluate(() => {
+      const text = document.body.innerText;
+      const lines = text.split('\n').map(l => l.replace(/\s+/g, ' ').trim());
+
+      const out = [];
+      let current = null;
+
+      for (const line of lines) {
+        // Sinf sarlavhasi: "4-A", "11-В", "2-Г"
+        if (/^\d{1,2}\s*-\s*[A-ZА-ЯЁ]$/i.test(line)) {
+          current = { name: line.replace(/\s+/g, ''), subjects: [] };
+          out.push(current);
+          continue;
+        }
+
+        const m = line.match(/^Журнал\s+предмета\s*:\s*(.+)$/i);
+        if (m && current) {
+          current.subjects = m[1]
+            .split(',')
+            .map(x => x.trim().replace(/\.$/, ''))
+            .filter(Boolean);
+        }
+      }
+
+      return out.filter(c => c.subjects.length);
+    }).catch(() => []);
   }
 
   // ---- 1-qadam: fayl ----
