@@ -67,6 +67,68 @@ export class EmaktabSession {
     );
   }
 
+  // Sayt ishlayaptimi? Texnik ishlar yoki server xatosini aniqlaydi.
+  async assertAlive(resp) {
+    const page = this.page;
+
+    const status = resp?.status?.() ?? 200;
+    if ([500, 502, 503, 504].includes(status)) throw new Error('MAINTENANCE');
+
+    const bad = await page.evaluate(() => {
+      const t = (document.body?.innerText || '').slice(0, 2000);
+      return /технически[ей]\s*работ|texnik\s*ishlar|техник\s*ишлар|временно\s*недоступ|vaqtincha\s*ishlamayapti|на\s*обслуживании|service\s*unavailable|bad\s*gateway|502|503/i
+        .test(t) && t.length < 1500;
+    }).catch(() => false);
+
+    if (bad) throw new Error('MAINTENANCE');
+  }
+
+  // Ishonchli o'tish: tarmoq xatosi ham texnik ishlar deb hisoblanadi
+  async go(url) {
+    let resp;
+    try {
+      resp = await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    } catch (e) {
+      if (/net::|ERR_|Timeout/i.test(e.message)) throw new Error('MAINTENANCE');
+      throw e;
+    }
+    await this.assertAlive(resp);
+    return resp;
+  }
+
+  // Tugmani bir necha usulda qidiradi: matn, input value, button, link.
+  // eMaktabda "Далее >" ba'zan <input type=submit value="Далее >"> bo'ladi.
+  async clickButton(word, { timeout = 15000 } = {}) {
+    const page = this.page;
+    const tries = [
+      `input[type="submit"][value*="${word}"]`,
+      `input[type="button"][value*="${word}"]`,
+      `button:has-text("${word}")`,
+      `a:has-text("${word}")`,
+      `text=${word}`,
+    ];
+
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      for (const sel of tries) {
+        const loc = page.locator(sel).first();
+        if (await loc.count().catch(() => 0)) {
+          await loc.click({ timeout: 5000 }).catch(() => {});
+          return true;
+        }
+      }
+      await page.waitForTimeout(500);
+    }
+
+    // Topilmadi — avval sayt tirikmi tekshiramiz
+    await this.assertAlive(null);
+
+    const info = await page.evaluate(() =>
+      document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 400)
+    ).catch(() => '');
+    throw new Error(`"${word}" tugmasi topilmadi.\n\n${info}`);
+  }
+
   // Sahifa tinchishini kutish. networkidle ishlatmaymiz —
   // eMaktab doimiy so'rov yuborib turadi va u hech qachon tugamaydi.
   async settle(ms = 1200) {
@@ -90,14 +152,14 @@ export class EmaktabSession {
     this.page = await this.ctx.newPage();
     this.page.setDefaultTimeout(30_000);
 
-    await this.page.goto(IMPORT_URL, { waitUntil: 'domcontentloaded' });
+    await this.go(IMPORT_URL);
     // login subdomeniga otib yuborsa — sessiya eskirgan
     return !/login\.emaktab\.uz/.test(this.page.url());
   }
 
   async login(username, password) {
     const page = this.page;
-    await page.goto('https://login.emaktab.uz/login', { waitUntil: 'domcontentloaded' });
+    await this.go('https://login.emaktab.uz/login');
 
     const userCandidates = [
       'input[name="login"]',
@@ -189,7 +251,7 @@ export class EmaktabSession {
     const page = this.page;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await page.goto(IMPORT_URL, { waitUntil: 'domcontentloaded' });
+      await this.go(IMPORT_URL);
       await this.settle(600);
 
       if (/login\.emaktab\.uz/.test(page.url())) throw new Error('BAD_CREDENTIALS');
@@ -203,7 +265,17 @@ export class EmaktabSession {
         const radio = page.locator('input[type="radio"]');
         if (await radio.count()) await radio.first().check().catch(() => {});
 
-        await page.click('text=Далее');
+        await this.settle(800);   // fayl qabul qilinishini kutamiz
+
+        // Sahifada xato chiqdimi?
+        const err = await page.evaluate(() => {
+          const t = document.body.innerText;
+          const m = t.match(/[^\n]*(не поддерж|неверн|ошибк|формат)[^\n]*/i);
+          return m ? m[0].trim() : '';
+        }).catch(() => '');
+        if (err && !/Ошибка!/.test(err)) throw new Error(`eMaktab: ${err}`);
+
+        await this.clickButton('Далее');
         await this.settle(400);
         return;
       }
@@ -399,7 +471,7 @@ export class EmaktabSession {
 
   // Moslashdan keyin "Далее" ni bosish (qo'lda rejim uchun alohida)
   async submitMapping() {
-    await this.page.click('text=Далее');
+    await this.clickButton('Далее');
     await this.page.waitForSelector('table tr', { timeout: 30000 }).catch(() => {});
     await this.settle(400);
   }
@@ -475,7 +547,7 @@ export class EmaktabSession {
 
   // ---- 4-qadam ----
   async confirmImport() {
-    await this.page.click('text=Импортировать >');
+    await this.clickButton('Импортировать');
     await this.settle(3000);
     return await this.page.screenshot({ fullPage: false });
   }

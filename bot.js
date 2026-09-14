@@ -354,9 +354,9 @@ async function doLogin(ctx, id, lang, username, password) {
     );
   } catch (e) {
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
-      e.message.startsWith('BAD_CREDENTIALS')
-        ? t(lang, 'bad_creds')
-        : t(lang, 'error', { msg: e.message }));
+      e.message === 'MAINTENANCE' ? t(lang, 'maintenance')
+      : e.message.startsWith('BAD_CREDENTIALS') ? t(lang, 'bad_creds')
+      : t(lang, 'error', { msg: e.message }));
   } finally {
     await es.close();
   }
@@ -575,8 +575,11 @@ bot.on('message:document', async ctx => {
     await askNext(ctx, id, lang);
   } catch (e) {
     await endSession(id);
-    await ctx.reply(e.message.startsWith('BAD_CREDENTIALS')
-      ? t(lang, 'bad_creds') : t(lang, 'error', { msg: e.message }));
+    await ctx.reply(
+      e.message === 'MAINTENANCE' ? t(lang, 'maintenance')
+      : e.message.startsWith('BAD_CREDENTIALS') ? t(lang, 'bad_creds')
+      : t(lang, 'error', { msg: e.message })
+    );
   }
 });
 
@@ -860,7 +863,8 @@ async function handleMerge(ctx, id, lang, text) {
     await startMapping(ctx, id, lang);
   } catch (e) {
     s.step = 'confirm';
-    await ctx.reply(t(lang, 'error', { msg: e.message }));
+    await ctx.reply(e.message === 'MAINTENANCE'
+      ? t(lang, 'maintenance') : t(lang, 'error', { msg: e.message }));
   }
 }
 
@@ -909,7 +913,8 @@ bot.callbackQuery('go', async ctx => {
       reply_markup: mainKb(lang),
     });
   } catch (e) {
-    await ctx.reply(t(lang, 'error', { msg: e.message }));
+    await ctx.reply(e.message === 'MAINTENANCE'
+      ? t(lang, 'maintenance') : t(lang, 'error', { msg: e.message }));
   } finally {
     await endSession(id);
   }

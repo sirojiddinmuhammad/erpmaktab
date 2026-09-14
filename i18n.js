@@ -156,6 +156,12 @@ const S = {
   skipped:    { uz: '\n\n⚠️ Kirmadi ({n} ta):\n{rows}', ru: '\n\n⚠️ Не загружено ({n}):\n{rows}' },
   charged:    { uz: '\n\n💳 {price} so\'m yechildi. Balans: {balance} so\'m', ru: '\n\n💳 Списано {price} сум. Баланс: {balance} сум' },
   session_end:{ uz: 'Sessiya tugagan. Qaytadan boshlang.', ru: 'Сессия завершена. Начните заново.' },
+  maintenance: {
+    uz: '🔧 eMaktab saytida texnik ishlar olib borilyapti yoki sayt vaqtincha ishlamayapti.\n\n' +
+        'Biroz kutib, qaytadan urinib ko\'ring. Balansingizdan pul yechilmadi.',
+    ru: '🔧 На сайте eMaktab ведутся технические работы или сайт временно недоступен.\n\n' +
+        'Попробуйте позже. С баланса ничего не списано.',
+  },
   error:      { uz: '❌ Xatolik: {msg}', ru: '❌ Ошибка: {msg}' },
 };
 
