@@ -239,43 +239,45 @@ export class EmaktabSession {
   }
 
   // "Мои классы" sahifasidan sinf va fanlarni o'qiydi.
-  // Natija: [{ cls: '4-А', subjects: ['Воспитание', ...] }]
+  // Sahifada ikkita panel bor: sinf rahbarligi va qolgan sinflar.
+  // Qolganlari bitta blokda <br><br> bilan ajratilgan — shuning uchun
+  // bloklarga emas, havolalar tartibiga qarab ajratamiz.
   async fetchClasses() {
     await this.go(`${BASE}/v2/myclasses`);
-    await this.page.waitForSelector('#ContentPanelMyClasses', { timeout: 15000 }).catch(() => {});
+    await this.page.waitForSelector('a[href*="/v2/class?class="]', { timeout: 15000 }).catch(() => {});
     await this.settle(400);
 
     return await this.page.evaluate(() => {
       const norm = t => (t || '').replace(/\s+/g, ' ').trim();
-      const out = [];
 
-      const panel = document.querySelector('#ContentPanelMyClasses') || document;
-      // Har bir sinf bloki .cc ichida. Topilmasa — sinf havolasidan yuqoriga chiqamiz.
-      let blocks = [...panel.querySelectorAll('.cc')];
-      if (!blocks.length) {
-        blocks = [...panel.querySelectorAll('a[href*="/v2/class?class="]')]
-          .map(a => a.closest('div'))
-          .filter(Boolean);
+      // Hujjat tartibida: sinf havolalari va fan havolalari
+      const anchors = [...document.querySelectorAll(
+        'a[href*="/v2/class?class="], a[href*="/subject/"]'
+      )];
+
+      const map = new Map();   // sinf -> fanlar
+      let cur = null;
+
+      for (const a of anchors) {
+        const href = a.getAttribute('href') || '';
+
+        if (href.includes('/v2/class?class=')) {
+          const cls = norm(a.textContent);
+          if (!cls) { cur = null; continue; }
+          if (!map.has(cls)) map.set(cls, []);
+          cur = map.get(cls);
+          continue;
+        }
+
+        // fan havolasi — oxirgi sinfga tegishli
+        if (!cur) continue;
+        const name = norm(a.getAttribute('title') || a.textContent);
+        if (name && !cur.includes(name)) cur.push(name);
       }
 
-      for (const b of blocks) {
-        const clsLink = b.querySelector('a[href*="/v2/class?class="]');
-        if (!clsLink) continue;
-
-        const cls = norm(clsLink.textContent);
-        if (!cls) continue;
-
-        // Fanlar: /subject/ havolalari. Nomi title'da aniqroq turadi.
-        const subjects = [...b.querySelectorAll('a[href*="/subject/"]')]
-          .map(a => norm(a.getAttribute('title') || a.textContent))
-          .filter(Boolean);
-
-        if (!subjects.length) continue;
-        if (out.some(o => o.cls === cls)) continue;
-
-        out.push({ cls, subjects: [...new Set(subjects)] });
-      }
-      return out;
+      return [...map.entries()]
+        .filter(([, subjects]) => subjects.length)
+        .map(([cls, subjects]) => ({ cls, subjects }));
     }).catch(() => []);
   }
 
