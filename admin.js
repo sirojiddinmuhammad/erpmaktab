@@ -45,7 +45,8 @@ export function panelKb() {
     .text('⭐ Obunachilar', 'a:l:subs:0').text('💰 Balansi borlar', 'a:l:money:0').row()
     .text('🔗 Hisob ulaganlar', 'a:l:linked:0').text('📤 Import qilganlar', 'a:l:imported:0').row()
     .text('👻 Faol emaslar', 'a:l:idle:0').text('➕ Balans', 'a:adj').row()
-    .text('📚 Reja qo\'shish', 'a:plan').text('🗂 Rejalar bazasi', 'a:pfilt').row()
+    .text('📚 Reja qo\'shish', 'a:plan').text('📦 Ommaviy yuklash', 'a:bulk').row()
+    .text('🗂 Rejalar bazasi', 'a:pfilt').row()
     .text('✉️ Xabar', 'a:msg');
 }
 
@@ -373,4 +374,47 @@ export async function showPlan(ctx, id, backOffset = 0) {
         .text('⬅️ Orqaga', `a:plans:${backOffset}`),
     }
   );
+}
+
+
+// ---------- ommaviy yuklash ----------
+// Sinf tugmalari: fayl nomidan taxmin qilingani birinchi va ✅ bilan
+export function bulkGradeKb(guess) {
+  const kb = new InlineKeyboard();
+  const order = guess ? [guess, ...GRADES.filter(g => g !== guess)] : GRADES;
+  order.forEach((g, i) => {
+    kb.text(g === guess ? `✅ ${g}` : `${g}`, `a:bg:${g}`);
+    if (i % 4 === 3) kb.row();
+  });
+  return kb.row().text('⏭ O\'tkazish', 'a:bskip').text('❌ To\'xtatish', 'a:bstop');
+}
+
+// Fan tugmalari: taxmin qilingani tepada
+export async function bulkSubjectKb(page = 0, medium = 'uz', guess = null) {
+  const L = medium === 'ru' ? 'ru' : 'uz';
+  const extra = await db.extraSubjects();
+  let all = [
+    ...SUBJECTS.map(s => ({ key: s.key, name: s[L] || s.uz })),
+    ...COMBOS.map(s => ({ key: s.key, name: s[L] || s.uz })),
+    ...extra.map(s => ({ key: s.key, name: s[L] || s.uz || s.key })),
+  ].filter((s, i, arr) => arr.findIndex(x => x.key === s.key) === i);
+
+  if (guess) {
+    const hit = all.find(s => s.key === guess);
+    if (hit) all = [hit, ...all.filter(s => s.key !== guess)];
+  }
+
+  const pages = Math.max(1, Math.ceil(all.length / SUBJ_PAGE));
+  const slice = all.slice(page * SUBJ_PAGE, (page + 1) * SUBJ_PAGE);
+
+  const kb = new InlineKeyboard();
+  slice.forEach((s, i) => {
+    kb.text(s.key === guess ? `✅ ${s.name}` : s.name, `a:bs:${s.key}`);
+    if (i % 2 === 1) kb.row();
+  });
+  kb.row();
+  if (page > 0) kb.text('⬅️', `a:bsp:${page - 1}`);
+  kb.text(`${page + 1}/${pages}`, 'a:noop');
+  if (page + 1 < pages) kb.text('➡️', `a:bsp:${page + 1}`);
+  return kb.row().text('⏭ O\'tkazish', 'a:bskip').text('❌ To\'xtatish', 'a:bstop');
 }

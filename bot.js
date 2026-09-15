@@ -13,6 +13,7 @@ import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
 import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import * as admin from './admin.js';
+import { subjectKey } from './subjects.js';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -581,8 +582,47 @@ bot.on('message:document', async ctx => {
   const id = ctx.from.id;
   const lang = await L(id);
 
-  // Admin ish reja yuklayapti
   const af = flow.get(id);
+
+  // Ommaviy yuklash: faylni navbatga qo'shamiz
+  if (id === ADMIN_ID && af?.kind === 'bulk' && af.stage === 'files') {
+    const doc = ctx.message.document;
+    if (!/\.xlsx?$/i.test(doc.file_name || '')) return;
+
+    const h = parseFileName(doc.file_name);
+    let topics = null;
+    if (/\.xlsx$/i.test(doc.file_name)) {
+      try {
+        const g = await ctx.api.getFile(doc.file_id);
+        const url = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${g.file_path}`;
+        await fs.mkdir(TMP, { recursive: true });
+        const local = path.join(TMP, `b_${Date.now()}.xlsx`);
+        await fs.writeFile(local, Buffer.from(await (await fetch(url)).arrayBuffer()));
+        topics = (await readRows(local)).rows.length;
+        await fs.unlink(local).catch(() => {});
+      } catch {}
+    }
+
+    af.queue.push({
+      fileId: doc.file_id,
+      name: doc.file_name,
+      topics,
+      gradeGuess: h.grade || null,
+      subjectGuess: guessSubject(doc.file_name, af.medium),
+    });
+    af.total = af.queue.length;
+
+    // Har bir faylga javob bermaymiz — har 5 tada bir marta
+    if (af.queue.length % 5 === 0 || af.queue.length === 1) {
+      await ctx.reply(`📥 ${af.queue.length} ta fayl navbatda`, {
+        reply_markup: new InlineKeyboard()
+          .text('▶️ Boshlash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop'),
+      });
+    }
+    return;
+  }
+
+  // Admin ish reja yuklayapti
   if (id === ADMIN_ID && af?.kind === 'plan' && af.stage === 'file') {
     const doc = ctx.message.document;
     if (!/\.xlsx?$/i.test(doc.file_name || '')) return ctx.reply('Faqat .xls yoki .xlsx');
@@ -1050,6 +1090,101 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return ctx.reply('➕ eMaktab loginini yozing:');
   }
 
+  // --- ommaviy yuklash ---
+  if (cmd === 'bulk') {
+    flow.set(ADMIN_ID, { kind: 'bulk', stage: 'medium', queue: [], saved: 0, skipped: 0 });
+    return ctx.reply("📦 <b>Ommaviy yuklash</b>\n\nTa'lim tili:", {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard()
+        .text("🇺🇿 O'zbek", 'a:bm:uz').text('🇷🇺 Rus', 'a:bm:ru').row()
+        .text('❌ Bekor', 'a:panel'),
+    });
+  }
+
+  if (cmd === 'bm') {
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk') return;
+    f.medium = parts[1];
+    f.stage = 'quarter';
+    const qk = new InlineKeyboard();
+    [1, 2, 3, 4].forEach(q => qk.text(`${q}-chorak`, `a:bq:${q}`));
+    return ctx.reply(`${admin.MEDIUM_FLAG[f.medium]}\n\nChorakni tanlang:`,
+      { reply_markup: qk.row().text('❌ Bekor', 'a:panel') });
+  }
+
+  if (cmd === 'bq') {
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk') return;
+    f.quarter = Number(parts[1]);
+    f.year = admin.currentYear();
+    f.stage = 'files';
+    return ctx.reply(
+      `${admin.MEDIUM_FLAG[f.medium]} · ${f.quarter}-chorak · ${f.year}\n\n` +
+      `Endi fayllarni tashlayvering. Tugagach "▶️ Boshlash" ni bosing.`,
+      { reply_markup: new InlineKeyboard()
+          .text('▶️ Boshlash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop') }
+    );
+  }
+
+  if (cmd === 'bgo') {
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk') return;
+    if (!f.queue.length) return ctx.reply('Hali fayl yuborilmadi.');
+    return askBulkFile(ctx);
+  }
+
+  if (cmd === 'bg') {   // sinf
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk' || !f.cur) return;
+    f.cur.grade = Number(parts[1]);
+    return ctx.reply(
+      `📄 ${f.done + 1}/${f.total} · ${esc(f.cur.name)}\n${f.cur.grade}-sinf\n\nFanni tanlang:`,
+      { parse_mode: 'HTML',
+        reply_markup: await admin.bulkSubjectKb(0, f.medium, f.cur.subjectGuess) }
+    );
+  }
+
+  if (cmd === 'bsp') {  // fan sahifasi
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk') return;
+    return ctx.editMessageReplyMarkup({
+      reply_markup: await admin.bulkSubjectKb(Number(parts[1]), f.medium, f.cur?.subjectGuess),
+    });
+  }
+
+  if (cmd === 'bs') {   // fan -> saqlash
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk' || !f.cur) return;
+
+    await db.savePlan({
+      grade: f.cur.grade, subjectKey: parts.slice(1).join(':'),
+      quarter: f.quarter, year: f.year, medium: f.medium,
+      fileId: f.cur.fileId, fileName: f.cur.name, topics: f.cur.topics,
+    });
+    f.saved++;
+    f.done++;
+    f.cur = null;
+    return askBulkFile(ctx);
+  }
+
+  if (cmd === 'bskip') {
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk') return;
+    f.skipped++;
+    f.done++;
+    f.cur = null;
+    return askBulkFile(ctx);
+  }
+
+  if (cmd === 'bstop') {
+    const f = flow.get(ADMIN_ID);
+    flow.delete(ADMIN_ID);
+    return ctx.reply(
+      `⏹ To'xtatildi\nSaqlandi: ${f?.saved || 0} · O'tkazildi: ${f?.skipped || 0}`,
+      { reply_markup: new InlineKeyboard().text('🛠 Panel', 'a:panel') }
+    );
+  }
+
   // --- ish rejalar ---
   if (cmd === 'plan') {
     flow.set(ADMIN_ID, { kind: 'plan', stage: 'file' });
@@ -1188,6 +1323,40 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return admin.broadcast(bot, ctx, f.audience, f.text);
   }
 });
+
+// Fayl nomidan fanni taxmin qilamiz
+function guessSubject(fileName, medium) {
+  const base = String(fileName || '')
+    .replace(/\.[^.]+$/, '')
+    .replace(/@[\w.-]+/g, ' ')
+    .replace(/[_]+/g, ' ');
+  return subjectKey(base);
+}
+
+// Ommaviy yuklash: navbatdagi faylni so'raymiz
+async function askBulkFile(ctx) {
+  const f = flow.get(ADMIN_ID);
+  if (!f || f.kind !== 'bulk') return;
+
+  const next = f.queue.shift();
+  if (!next) {
+    flow.delete(ADMIN_ID);
+    return ctx.reply(
+      `✅ <b>Tugadi</b>\nSaqlandi: ${f.saved} ta · O'tkazildi: ${f.skipped} ta`,
+      { parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text('🗂 Baza', 'a:pfilt').text('📦 Yana yuklash', 'a:bulk') }
+    );
+  }
+
+  f.cur = next;
+  return ctx.reply(
+    `📄 ${f.done + 1}/${f.total} · ${esc(next.name)}` +
+    (next.topics ? `\n${next.topics} ta mavzu` : '') +
+    `\n\nSinfni tanlang:`,
+    { parse_mode: 'HTML', reply_markup: admin.bulkGradeKb(next.gradeGuess) }
+  );
+}
 
 // ---------- qo'llanma (Telegram Mini App) ----------
 // Railway PORT bersa, guide.html shu manzilda ochiladi.
