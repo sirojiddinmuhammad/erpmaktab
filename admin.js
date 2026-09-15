@@ -281,29 +281,31 @@ export function quartersKb() {
 }
 
 const PLAN_PAGE = 15;
-const STAGE_NAME = { low: "Boshlang'ich 1-4", high: 'Yuqori 5-11' };
 
 // Filtr tanlash ekrani
 export async function showPlanFilter(ctx, f = {}, edit = false) {
   const total = await db.countPlans();
-
   const mark = (on, label) => (on ? `✅ ${label}` : label);
+
   const kb = new InlineKeyboard()
     .text(mark(f.medium === 'uz', "🇺🇿 O'zbek"), 'a:pfm:uz')
-    .text(mark(f.medium === 'ru', '🇷🇺 Rus'), 'a:pfm:ru').row()
-    .text(mark(f.stage === 'low', STAGE_NAME.low), 'a:pfs:low')
-    .text(mark(f.stage === 'high', STAGE_NAME.high), 'a:pfs:high').row()
-    .text(mark(f.quarter === 1, '1-chorak'), 'a:pfq:1')
-    .text(mark(f.quarter === 2, '2-chorak'), 'a:pfq:2').row()
-    .text(mark(f.quarter === 3, '3-chorak'), 'a:pfq:3')
-    .text(mark(f.quarter === 4, '4-chorak'), 'a:pfq:4').row();
+    .text(mark(f.medium === 'ru', '🇷🇺 Rus'), 'a:pfm:ru').row();
 
-  const ready = f.medium && f.stage && f.quarter;
+  GRADES.forEach((g, i) => {
+    kb.text(mark(f.grade === g, `${g}`), `a:pfg:${g}`);
+    if (i % 6 === 5) kb.row();
+  });
+  kb.row();
+
+  [1, 2, 3, 4].forEach(q => kb.text(mark(f.quarter === q, `${q}-chorak`), `a:pfq:${q}`));
+  kb.row();
+
+  const ready = f.medium && f.grade && f.quarter;
   if (ready) kb.text("📋 Ro'yxatni ko'rish", 'a:plans:0').row();
   kb.text('📚 Reja qo\'shish', 'a:plan').text('🛠 Panel', 'a:panel');
 
   const text = `🗂 <b>Rejalar bazasi</b> · ${total} ta\n\n` +
-    (ready ? 'Tanlandi. Ro\'yxatni ko\'rishingiz mumkin.' : 'Til, sinf va chorakni tanlang:');
+    (ready ? "Tanlandi. Ro'yxatni ko'rishingiz mumkin." : 'Til, sinf va chorakni tanlang:');
 
   const opts = { parse_mode: 'HTML', reply_markup: kb };
   if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
@@ -315,21 +317,12 @@ export async function showPlans(ctx, offset = 0, edit = false, filter = {}) {
   const pages = Math.max(1, Math.ceil(total / PLAN_PAGE));
   const page = Math.floor(offset / PLAN_PAGE) + 1;
 
-  // Sinf bo'yicha guruhlaymiz (til, chorak, yil sarlavhada)
-  const groups = new Map();
-  rows.forEach((r, i) => {
-    const key = `${r.grade}-sinf`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ ...r, n: i + 1 });
-  });
-
+  // Sinf, til, chorak sarlavhada — qatorlarda faqat fan
   const lang = filter.medium === 'ru' ? 'ru' : 'uz';
-  const body = [...groups.entries()].map(([g, list]) =>
-    `<b>${esc(g)}</b>\n` + list.map(r =>
-      `${r.n}. ${esc(nameOf(r.subject_key, lang))}` +
-      (r.topics ? ` · ${r.topics} mavzu` : '')
-    ).join('\n')
-  ).join('\n\n') || '—';
+  const body = rows.map((r, i) =>
+    `${i + 1}. ${esc(nameOf(r.subject_key, lang))}` +
+    (r.topics ? ` · ${r.topics} mavzu` : '')
+  ).join('\n') || '—';
 
   const kb = new InlineKeyboard();
   rows.forEach((r, i) => {
@@ -344,7 +337,7 @@ export async function showPlans(ctx, offset = 0, edit = false, filter = {}) {
 
   const head = [
     MEDIUM_FLAG[filter.medium] || '',
-    STAGE_NAME[filter.stage] || '',
+    filter.grade ? `${filter.grade}-sinf` : '',
     filter.quarter ? `${filter.quarter}-chorak` : '',
   ].filter(Boolean).join(' · ');
 

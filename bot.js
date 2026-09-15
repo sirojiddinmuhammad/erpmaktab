@@ -1194,11 +1194,11 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
   if (cmd === 'pfilt') return admin.showPlanFilter(ctx, planFilter, true);
 
   if (cmd === 'pfm') { planFilter.medium = parts[1]; return admin.showPlanFilter(ctx, planFilter, true); }
-  if (cmd === 'pfs') { planFilter.stage = parts[1]; return admin.showPlanFilter(ctx, planFilter, true); }
+  if (cmd === 'pfg') { planFilter.grade = Number(parts[1]); return admin.showPlanFilter(ctx, planFilter, true); }
   if (cmd === 'pfq') { planFilter.quarter = Number(parts[1]); return admin.showPlanFilter(ctx, planFilter, true); }
 
   if (cmd === 'plans') {
-    if (!planFilter.medium || !planFilter.stage || !planFilter.quarter)
+    if (!planFilter.medium || !planFilter.grade || !planFilter.quarter)
       return admin.showPlanFilter(ctx, planFilter, true);
     return admin.showPlans(ctx, Number(parts[1]) || 0, true, planFilter);
   }

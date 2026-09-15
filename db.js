@@ -411,8 +411,7 @@ export async function listPlans(offset = 0, limit = 15, filter = {}) {
   if (filter.medium)  { args.push(filter.medium);  cond.push(`medium = $${args.length}`); }
   if (filter.quarter) { args.push(filter.quarter); cond.push(`quarter = $${args.length}`); }
   if (filter.year)    { args.push(filter.year);    cond.push(`year = $${args.length}`); }
-  if (filter.stage === 'low')  cond.push('grade between 1 and 4');
-  if (filter.stage === 'high') cond.push('grade between 5 and 11');
+  if (filter.grade) { args.push(filter.grade); cond.push(`grade = $${args.length}`); }
 
   const where = cond.length ? `where ${cond.join(' and ')}` : '';
 
