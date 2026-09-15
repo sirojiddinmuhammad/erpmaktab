@@ -45,7 +45,7 @@ export function panelKb() {
     .text('⭐ Obunachilar', 'a:l:subs:0').text('💰 Balansi borlar', 'a:l:money:0').row()
     .text('🔗 Hisob ulaganlar', 'a:l:linked:0').text('📤 Import qilganlar', 'a:l:imported:0').row()
     .text('👻 Faol emaslar', 'a:l:idle:0').text('➕ Balans', 'a:adj').row()
-    .text('📚 Reja qo\'shish', 'a:plan').text('🗂 Rejalar bazasi', 'a:plans:0').row()
+    .text('📚 Reja qo\'shish', 'a:plan').text('🗂 Rejalar bazasi', 'a:pfilt').row()
     .text('✉️ Xabar', 'a:msg');
 }
 
@@ -280,23 +280,52 @@ export function quartersKb() {
 }
 
 const PLAN_PAGE = 15;
+const STAGE_NAME = { low: "Boshlang'ich 1-4", high: 'Yuqori 5-11' };
 
-export async function showPlans(ctx, offset = 0, edit = false) {
-  const { rows, total } = await db.listPlans(offset, PLAN_PAGE);
+// Filtr tanlash ekrani
+export async function showPlanFilter(ctx, f = {}, edit = false) {
+  const total = await db.countPlans();
+
+  const mark = (on, label) => (on ? `✅ ${label}` : label);
+  const kb = new InlineKeyboard()
+    .text(mark(f.medium === 'uz', "🇺🇿 O'zbek"), 'a:pfm:uz')
+    .text(mark(f.medium === 'ru', '🇷🇺 Rus'), 'a:pfm:ru').row()
+    .text(mark(f.stage === 'low', STAGE_NAME.low), 'a:pfs:low')
+    .text(mark(f.stage === 'high', STAGE_NAME.high), 'a:pfs:high').row()
+    .text(mark(f.quarter === 1, '1-chorak'), 'a:pfq:1')
+    .text(mark(f.quarter === 2, '2-chorak'), 'a:pfq:2').row()
+    .text(mark(f.quarter === 3, '3-chorak'), 'a:pfq:3')
+    .text(mark(f.quarter === 4, '4-chorak'), 'a:pfq:4').row();
+
+  const ready = f.medium && f.stage && f.quarter;
+  if (ready) kb.text("📋 Ro'yxatni ko'rish", 'a:plans:0').row();
+  kb.text('📚 Reja qo\'shish', 'a:plan').text('🛠 Panel', 'a:panel');
+
+  const text = `🗂 <b>Rejalar bazasi</b> · ${total} ta\n\n` +
+    (ready ? 'Tanlandi. Ro\'yxatni ko\'rishingiz mumkin.' : 'Til, sinf va chorakni tanlang:');
+
+  const opts = { parse_mode: 'HTML', reply_markup: kb };
+  if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
+  return ctx.reply(text, opts);
+}
+
+export async function showPlans(ctx, offset = 0, edit = false, filter = {}) {
+  const { rows, total } = await db.listPlans(offset, PLAN_PAGE, filter);
   const pages = Math.max(1, Math.ceil(total / PLAN_PAGE));
   const page = Math.floor(offset / PLAN_PAGE) + 1;
 
-  // Yil · chorak · til bo'yicha guruhlaymiz
+  // Sinf bo'yicha guruhlaymiz (til, chorak, yil sarlavhada)
   const groups = new Map();
   rows.forEach((r, i) => {
-    const key = `${r.year || '—'} · ${r.quarter}-chorak · ${MEDIUM_FLAG[r.medium] || ''}`;
+    const key = `${r.grade}-sinf`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ ...r, n: i + 1 });
   });
 
+  const lang = filter.medium === 'ru' ? 'ru' : 'uz';
   const body = [...groups.entries()].map(([g, list]) =>
     `<b>${esc(g)}</b>\n` + list.map(r =>
-      `${r.n}. ${r.grade}-sinf · ${esc(nameOf(r.subject_key, r.medium === 'ru' ? 'ru' : 'uz'))}` +
+      `${r.n}. ${esc(nameOf(r.subject_key, lang))}` +
       (r.topics ? ` · ${r.topics} mavzu` : '')
     ).join('\n')
   ).join('\n\n') || '—';
@@ -310,9 +339,15 @@ export async function showPlans(ctx, offset = 0, edit = false) {
   if (offset > 0) kb.text('⬅️', `a:plans:${offset - PLAN_PAGE}`);
   kb.text(`${page}/${pages}`, 'a:noop');
   if (offset + PLAN_PAGE < total) kb.text('➡️', `a:plans:${offset + PLAN_PAGE}`);
-  kb.row().text('📚 Reja qo\'shish', 'a:plan').text('🛠 Panel', 'a:panel');
+  kb.row().text('🔧 Filtr', 'a:pfilt').text('🛠 Panel', 'a:panel');
 
-  const text = `🗂 <b>Rejalar bazasi</b> · ${total} ta\n\n${body}`;
+  const head = [
+    MEDIUM_FLAG[filter.medium] || '',
+    STAGE_NAME[filter.stage] || '',
+    filter.quarter ? `${filter.quarter}-chorak` : '',
+  ].filter(Boolean).join(' · ');
+
+  const text = `🗂 <b>${esc(head)}</b> · ${total} ta\n\n${body}`;
   const opts = { parse_mode: 'HTML', reply_markup: kb };
   if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
   return ctx.reply(text, opts);

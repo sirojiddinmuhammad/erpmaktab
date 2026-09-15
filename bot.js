@@ -1015,6 +1015,9 @@ bot.callbackQuery('go', async ctx => {
 // ---------- admin paneli ----------
 const isAdmin = ctx => ctx.from?.id === ADMIN_ID;
 
+// Admin uchun joriy filtr (bitta admin bo'lgani uchun yagona obyekt yetarli)
+const planFilter = {};
+
 bot.command('admin', async ctx => {
   if (!isAdmin(ctx)) return;
   await ctx.reply('🛠 <b>Admin panel</b>', { parse_mode: 'HTML', reply_markup: admin.panelKb() });
@@ -1053,7 +1056,17 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return ctx.reply('📚 Ish reja faylini yuboring (.xlsx yoki .xls):');
   }
 
-  if (cmd === 'plans') return admin.showPlans(ctx, Number(parts[1]) || 0, true);
+  if (cmd === 'pfilt') return admin.showPlanFilter(ctx, planFilter, true);
+
+  if (cmd === 'pfm') { planFilter.medium = parts[1]; return admin.showPlanFilter(ctx, planFilter, true); }
+  if (cmd === 'pfs') { planFilter.stage = parts[1]; return admin.showPlanFilter(ctx, planFilter, true); }
+  if (cmd === 'pfq') { planFilter.quarter = Number(parts[1]); return admin.showPlanFilter(ctx, planFilter, true); }
+
+  if (cmd === 'plans') {
+    if (!planFilter.medium || !planFilter.stage || !planFilter.quarter)
+      return admin.showPlanFilter(ctx, planFilter, true);
+    return admin.showPlans(ctx, Number(parts[1]) || 0, true, planFilter);
+  }
 
   if (cmd === 'pg') {   // sinf tanlandi -> ta'lim tili
     const f = flow.get(ADMIN_ID);
@@ -1092,7 +1105,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
   if (cmd === 'pdy') {
     await db.deletePlan(Number(parts[1]));
     return ctx.reply('🗑 O\'chirildi.', {
-      reply_markup: new InlineKeyboard().text('🗂 Baza', 'a:plans:0'),
+      reply_markup: new InlineKeyboard().text('🗂 Baza', 'a:pfilt'),
     });
   }
 
@@ -1154,7 +1167,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
       (f.topics ? `\n${f.topics} ta mavzu` : ''),
       { parse_mode: 'HTML',
         reply_markup: new InlineKeyboard()
-          .text('➕ Yana qo\'shish', 'a:plan').text('🗂 Baza', 'a:plans:0') }
+          .text('➕ Yana qo\'shish', 'a:plan').text('🗂 Baza', 'a:pfilt') }
     );
   }
 

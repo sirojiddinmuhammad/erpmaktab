@@ -403,15 +403,30 @@ export async function planYears() {
   return rows.map(r => r.year);
 }
 
-export async function listPlans(offset = 0, limit = 20, year = null) {
-  const where = year ? 'where year = $3' : '';
-  const params = year ? [limit, offset, year] : [limit, offset];
+// Filtr: { medium, stage: 'low'|'high', quarter, year }
+export async function listPlans(offset = 0, limit = 15, filter = {}) {
+  const cond = [];
+  const args = [];
+
+  if (filter.medium)  { args.push(filter.medium);  cond.push(`medium = $${args.length}`); }
+  if (filter.quarter) { args.push(filter.quarter); cond.push(`quarter = $${args.length}`); }
+  if (filter.year)    { args.push(filter.year);    cond.push(`year = $${args.length}`); }
+  if (filter.stage === 'low')  cond.push('grade between 1 and 4');
+  if (filter.stage === 'high') cond.push('grade between 5 and 11');
+
+  const where = cond.length ? `where ${cond.join(' and ')}` : '';
+
   const { rows } = await pool.query(
-    `select * from plans ${where} order by year desc, quarter, medium, grade, subject_key
-      limit $1 offset $2`, params);
-  const { rows: c } = await pool.query(
-    `select count(*) from plans ${year ? 'where year = $1' : ''}`, year ? [year] : []);
+    `select * from plans ${where} order by grade, subject_key limit $${args.length + 1} offset $${args.length + 2}`,
+    [...args, limit, offset]);
+
+  const { rows: c } = await pool.query(`select count(*) from plans ${where}`, args);
   return { rows, total: Number(c[0].count) };
+}
+
+export async function countPlans() {
+  const { rows } = await pool.query('select count(*) from plans');
+  return Number(rows[0].count);
 }
 
 export async function getPlan(id) {
