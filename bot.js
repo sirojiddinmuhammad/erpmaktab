@@ -1055,16 +1055,52 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
 
   if (cmd === 'plans') return admin.showPlans(ctx, Number(parts[1]) || 0, true);
 
-  if (cmd === 'pg') {   // sinf tanlandi
+  if (cmd === 'pg') {   // sinf tanlandi -> ta'lim tili
     const f = flow.get(ADMIN_ID);
     if (f?.kind !== 'plan') return;
     f.grade = Number(parts[1]);
+    f.stage = 'medium';
+    return ctx.reply(`${f.grade}-sinf\n\nTa'lim tili:`, { reply_markup: admin.mediumKb() });
+  }
+
+  if (cmd === 'pm') {   // til tanlandi -> fan
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.medium = parts[1];
     f.stage = 'subject';
-    return ctx.reply(`${f.grade}-sinf · fanni tanlang:`, { reply_markup: await admin.subjectsKb(0) });
+    return ctx.reply(
+      `${f.grade}-sinf · ${admin.MEDIUM_FLAG[f.medium]}\n\nFanni tanlang:`,
+      { reply_markup: await admin.subjectsKb(0, f.medium) }
+    );
+  }
+
+  if (cmd === 'pv') return admin.showPlan(ctx, Number(parts[1]), Number(parts[2]) || 0);
+
+  if (cmd === 'pf') {   // faylni yuborish
+    const p = await db.getPlan(Number(parts[1]));
+    if (!p) return ctx.reply('Reja topilmadi.');
+    return ctx.replyWithDocument(p.file_id, { caption: p.file_name || '' });
+  }
+
+  if (cmd === 'pd') {   // o'chirishni tasdiqlash
+    return ctx.reply(`🗑 Rejani o'chiramizmi?`, {
+      reply_markup: new InlineKeyboard()
+        .text('✅ Ha', `a:pdy:${parts[1]}`).text('❌ Yo\'q', `a:pv:${parts[1]}:0`),
+    });
+  }
+
+  if (cmd === 'pdy') {
+    await db.deletePlan(Number(parts[1]));
+    return ctx.reply('🗑 O\'chirildi.', {
+      reply_markup: new InlineKeyboard().text('🗂 Baza', 'a:plans:0'),
+    });
   }
 
   if (cmd === 'psp') {  // fan ro'yxati sahifasi
-    return ctx.editMessageReplyMarkup({ reply_markup: await admin.subjectsKb(Number(parts[1])) });
+    const f0 = flow.get(ADMIN_ID);
+    return ctx.editMessageReplyMarkup({
+      reply_markup: await admin.subjectsKb(Number(parts[1]), f0?.medium),
+    });
   }
 
   if (cmd === 'psnew') {
@@ -1080,7 +1116,8 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     if (f?.kind !== 'plan') return;
     f.subject = parts.slice(1).join(':');
     f.stage = 'quarter';
-    return ctx.reply(`${f.grade}-sinf · ${admin.nameOf(f.subject)}\n\nChorakni tanlang:`,
+    return ctx.reply(
+      `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)}\n\nChorakni tanlang:`,
       { reply_markup: admin.quartersKb() });
   }
 
@@ -1091,7 +1128,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     f.year = admin.currentYear();
 
     return ctx.reply(
-      `${f.grade}-sinf · ${admin.nameOf(f.subject)} · ${f.quarter}-chorak\n\n` +
+      `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)} · ${f.quarter}-chorak\n\n` +
       `O'quv yili:`,
       { reply_markup: admin.yearsKb(f.year) }
     );
@@ -1104,14 +1141,16 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     f.year = `${y}/${y + 1}`;
 
     const res = await db.savePlan({
-      grade: f.grade, subjectKey: f.subject, quarter: f.quarter, year: f.year,
+      grade: f.grade, subjectKey: f.subject, quarter: f.quarter,
+      year: f.year, medium: f.medium,
       fileId: f.fileId, fileName: f.fileName, topics: f.topics,
     });
     flow.delete(ADMIN_ID);
 
     return ctx.reply(
       `${res.is_new ? '✅ Saqlandi' : '♻️ Yangilandi'}\n\n` +
-      `${f.grade}-sinf · ${admin.nameOf(f.subject)} · ${f.quarter}-chorak · ${f.year}` +
+      `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)} · ${f.quarter}-chorak · ` +
+      `${f.year} · ${admin.MEDIUM_FLAG[f.medium]}` +
       (f.topics ? `\n${f.topics} ta mavzu` : ''),
       { parse_mode: 'HTML',
         reply_markup: new InlineKeyboard()

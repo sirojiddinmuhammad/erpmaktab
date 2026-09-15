@@ -79,10 +79,13 @@ create table if not exists plans (
 );
 
 alter table plans add column if not exists year text;
+alter table plans add column if not exists medium text;
 update plans set year = '2026/2027' where year is null;
+update plans set medium = 'uz' where medium is null;
 alter table plans drop constraint if exists plans_grade_subject_key_quarter_key;
-create unique index if not exists plans_uniq
-  on plans (grade, subject_key, quarter, year);
+drop index if exists plans_uniq;
+create unique index if not exists plans_uniq2
+  on plans (grade, subject_key, quarter, year, medium);
 
 create table if not exists subject_extra (
   key        text primary key,
@@ -381,15 +384,15 @@ export async function ledgerRecent(tgId, n = 10) {
 }
 
 // ---------- ish rejalar ----------
-export async function savePlan({ grade, subjectKey, quarter, year, fileId, fileName, topics }) {
+export async function savePlan({ grade, subjectKey, quarter, year, medium, fileId, fileName, topics }) {
   const { rows } = await pool.query(
-    `insert into plans (grade, subject_key, quarter, year, file_id, file_name, topics)
-     values ($1,$2,$3,$4,$5,$6,$7)
-     on conflict (grade, subject_key, quarter, year) do update
+    `insert into plans (grade, subject_key, quarter, year, medium, file_id, file_name, topics)
+     values ($1,$2,$3,$4,$5,$6,$7,$8)
+     on conflict (grade, subject_key, quarter, year, medium) do update
         set file_id = excluded.file_id, file_name = excluded.file_name,
             topics = excluded.topics, created_at = now()
      returning *, (xmax = 0) as is_new`,
-    [grade, subjectKey, quarter, year, fileId, fileName, topics]);
+    [grade, subjectKey, quarter, year, medium, fileId, fileName, topics]);
   return rows[0];
 }
 
@@ -404,7 +407,7 @@ export async function listPlans(offset = 0, limit = 20, year = null) {
   const where = year ? 'where year = $3' : '';
   const params = year ? [limit, offset, year] : [limit, offset];
   const { rows } = await pool.query(
-    `select * from plans ${where} order by year desc, quarter, grade, subject_key
+    `select * from plans ${where} order by year desc, quarter, medium, grade, subject_key
       limit $1 offset $2`, params);
   const { rows: c } = await pool.query(
     `select count(*) from plans ${year ? 'where year = $1' : ''}`, year ? [year] : []);

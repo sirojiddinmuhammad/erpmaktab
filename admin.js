@@ -220,6 +220,14 @@ export function currentYear() {
   return `${y}/${y + 1}`;
 }
 
+export function mediumKb() {
+  return new InlineKeyboard()
+    .text('🇺🇿 O\'zbek', 'a:pm:uz').text('🇷🇺 Rus', 'a:pm:ru').row()
+    .text('❌ Bekor', 'a:panel');
+}
+
+export const MEDIUM_FLAG = { uz: '🇺🇿', ru: '🇷🇺' };
+
 export function yearsKb(current) {
   const base = Number(current.slice(0, 4));
   const kb = new InlineKeyboard();
@@ -240,12 +248,13 @@ export function gradesKb() {
   return kb.row().text('❌ Bekor', 'a:panel');
 }
 
-export async function subjectsKb(page = 0) {
+export async function subjectsKb(page = 0, medium = 'uz') {
+  const L = medium === 'ru' ? 'ru' : 'uz';
   const extra = await db.extraSubjects();
   const all = [
-    ...SUBJECTS.map(s => ({ key: s.key, uz: s.uz })),
-    ...COMBOS.map(s => ({ key: s.key, uz: s.uz })),
-    ...extra.map(s => ({ key: s.key, uz: s.uz || s.key })),
+    ...SUBJECTS.map(s => ({ key: s.key, uz: s[L] || s.uz })),
+    ...COMBOS.map(s => ({ key: s.key, uz: s[L] || s.uz })),
+    ...extra.map(s => ({ key: s.key, uz: s[L] || s.uz || s.key })),
   ].filter((s, i, arr) => arr.findIndex(x => x.key === s.key) === i);
 
   const pages = Math.max(1, Math.ceil(all.length / SUBJ_PAGE));
@@ -270,29 +279,63 @@ export function quartersKb() {
   return kb.row().text('❌ Bekor', 'a:panel');
 }
 
+const PLAN_PAGE = 15;
+
 export async function showPlans(ctx, offset = 0, edit = false) {
-  const { rows, total } = await db.listPlans(offset, 20);
-  const pages = Math.max(1, Math.ceil(total / 20));
-  const page = Math.floor(offset / 20) + 1;
+  const { rows, total } = await db.listPlans(offset, PLAN_PAGE);
+  const pages = Math.max(1, Math.ceil(total / PLAN_PAGE));
+  const page = Math.floor(offset / PLAN_PAGE) + 1;
 
-  const byQ = {};
-  for (const r of rows) (byQ[`${r.year || '—'} · ${r.quarter}-chorak`] ??= []).push(r);
+  // Yil · chorak · til bo'yicha guruhlaymiz
+  const groups = new Map();
+  rows.forEach((r, i) => {
+    const key = `${r.year || '—'} · ${r.quarter}-chorak · ${MEDIUM_FLAG[r.medium] || ''}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ ...r, n: i + 1 });
+  });
 
-  const body = Object.entries(byQ).map(([q, list]) =>
-    `<b>${esc(q)}</b>\n` + list.map(r =>
-      `${r.grade}-sinf · ${esc(nameOf(r.subject_key))}` +
+  const body = [...groups.entries()].map(([g, list]) =>
+    `<b>${esc(g)}</b>\n` + list.map(r =>
+      `${r.n}. ${r.grade}-sinf · ${esc(nameOf(r.subject_key, r.medium === 'ru' ? 'ru' : 'uz'))}` +
       (r.topics ? ` · ${r.topics} mavzu` : '')
     ).join('\n')
   ).join('\n\n') || '—';
 
   const kb = new InlineKeyboard();
-  if (offset > 0) kb.text('⬅️', `a:plans:${offset - 20}`);
+  rows.forEach((r, i) => {
+    kb.text(`${i + 1}`, `a:pv:${r.id}:${offset}`);
+    if (i % 5 === 4) kb.row();
+  });
+  kb.row();
+  if (offset > 0) kb.text('⬅️', `a:plans:${offset - PLAN_PAGE}`);
   kb.text(`${page}/${pages}`, 'a:noop');
-  if (offset + 20 < total) kb.text('➡️', `a:plans:${offset + 20}`);
+  if (offset + PLAN_PAGE < total) kb.text('➡️', `a:plans:${offset + PLAN_PAGE}`);
   kb.row().text('📚 Reja qo\'shish', 'a:plan').text('🛠 Panel', 'a:panel');
 
   const text = `🗂 <b>Rejalar bazasi</b> · ${total} ta\n\n${body}`;
   const opts = { parse_mode: 'HTML', reply_markup: kb };
   if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
   return ctx.reply(text, opts);
+}
+
+// Bitta rejaning kartochkasi
+export async function showPlan(ctx, id, backOffset = 0) {
+  const p = await db.getPlan(id);
+  if (!p) return ctx.reply('Reja topilmadi.');
+
+  const lang = p.medium === 'ru' ? 'ru' : 'uz';
+  await ctx.reply(
+    `📗 <b>${p.grade}-sinf · ${esc(nameOf(p.subject_key, lang))}</b>\n` +
+    `${p.quarter}-chorak · ${esc(p.year || '—')} · ${MEDIUM_FLAG[p.medium] || ''}\n` +
+    (p.topics ? `${p.topics} ta mavzu\n` : '') +
+    `Fayl: ${esc(p.file_name || '—')}\n` +
+    `Qo'shilgan: ${new Date(p.created_at).toISOString().slice(0, 10)}`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard()
+        .text('📥 Faylni olish', `a:pf:${p.id}`)
+        .text('🗑 O\'chirish', `a:pd:${p.id}`).row()
+        .text('⬅️ Orqaga', `a:plans:${backOffset}`),
+    }
+  );
 }
