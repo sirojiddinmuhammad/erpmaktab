@@ -2,6 +2,24 @@
 import { InlineKeyboard, InputFile } from 'grammy';
 import * as db from './db.js';
 import { money } from './i18n.js';
+import { SUBJECTS, COMBOS, subjectName } from './subjects.js';
+
+// Qo'lda qo'shilgan fanlar (bazadan), nom topish uchun
+const extraNames = new Map();
+
+export async function loadExtraSubjects() {
+  const rows = await db.extraSubjects();
+  extraNames.clear();
+  for (const r of rows) extraNames.set(r.key, { uz: r.uz, ru: r.ru });
+  return rows.length;
+}
+
+// Lug'atdan yoki bazadan fan nomini oladi
+export function nameOf(key, lang = 'uz') {
+  const e = extraNames.get(key);
+  if (e) return e[lang] || e.uz || key;
+  return subjectName(key, lang);
+}
 
 const PAGE = 30;
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -27,6 +45,7 @@ export function panelKb() {
     .text('⭐ Obunachilar', 'a:l:subs:0').text('💰 Balansi borlar', 'a:l:money:0').row()
     .text('🔗 Hisob ulaganlar', 'a:l:linked:0').text('📤 Import qilganlar', 'a:l:imported:0').row()
     .text('👻 Faol emaslar', 'a:l:idle:0').text('➕ Balans', 'a:adj').row()
+    .text('📚 Reja qo\'shish', 'a:plan').text('🗂 Rejalar bazasi', 'a:plans:0').row()
     .text('✉️ Xabar', 'a:msg');
 }
 
@@ -188,4 +207,92 @@ export async function broadcast(bot, ctx, kind, text) {
 
   await ctx.api.editMessageText(ctx.chat.id, status.message_id,
     `✅ ${ok} ta yetkazildi · ❌ ${fail} ta yetmadi`).catch(() => {});
+}
+
+
+// ---------- ish rejalar ----------
+const GRADES = [1,2,3,4,5,6,7,8,9,10,11];
+
+// Joriy o'quv yili (sentyabrdan yangisi boshlanadi)
+export function currentYear() {
+  const d = new Date();
+  const y = d.getMonth() >= 7 ? d.getFullYear() : d.getFullYear() - 1;
+  return `${y}/${y + 1}`;
+}
+
+export function yearsKb(current) {
+  const base = Number(current.slice(0, 4));
+  const kb = new InlineKeyboard();
+  [base - 1, base, base + 1].forEach(y => {
+    const label = `${y}/${y + 1}`;
+    kb.text(label === current ? `✅ ${label}` : label, `a:py:${y}`);
+  });
+  return kb.row().text('❌ Bekor', 'a:panel');
+}
+const SUBJ_PAGE = 12;
+
+export function gradesKb() {
+  const kb = new InlineKeyboard();
+  GRADES.forEach((g, i) => {
+    kb.text(`${g}`, `a:pg:${g}`);
+    if (i % 4 === 3) kb.row();
+  });
+  return kb.row().text('❌ Bekor', 'a:panel');
+}
+
+export async function subjectsKb(page = 0) {
+  const extra = await db.extraSubjects();
+  const all = [
+    ...SUBJECTS.map(s => ({ key: s.key, uz: s.uz })),
+    ...COMBOS.map(s => ({ key: s.key, uz: s.uz })),
+    ...extra.map(s => ({ key: s.key, uz: s.uz || s.key })),
+  ].filter((s, i, arr) => arr.findIndex(x => x.key === s.key) === i);
+
+  const pages = Math.max(1, Math.ceil(all.length / SUBJ_PAGE));
+  const slice = all.slice(page * SUBJ_PAGE, (page + 1) * SUBJ_PAGE);
+
+  const kb = new InlineKeyboard();
+  slice.forEach((s, i) => {
+    kb.text(s.uz, `a:ps:${s.key}`);
+    if (i % 2 === 1) kb.row();
+  });
+  kb.row();
+  if (page > 0) kb.text('⬅️', `a:psp:${page - 1}`);
+  kb.text(`${page + 1}/${pages}`, 'a:noop');
+  if (page + 1 < pages) kb.text('➡️', `a:psp:${page + 1}`);
+  kb.row().text('✏️ Qo\'lda qo\'shish', 'a:psnew').text('❌ Bekor', 'a:panel');
+  return kb;
+}
+
+export function quartersKb() {
+  const kb = new InlineKeyboard();
+  [1,2,3,4].forEach(q => kb.text(`${q}-chorak`, `a:pq:${q}`));
+  return kb.row().text('❌ Bekor', 'a:panel');
+}
+
+export async function showPlans(ctx, offset = 0, edit = false) {
+  const { rows, total } = await db.listPlans(offset, 20);
+  const pages = Math.max(1, Math.ceil(total / 20));
+  const page = Math.floor(offset / 20) + 1;
+
+  const byQ = {};
+  for (const r of rows) (byQ[`${r.year || '—'} · ${r.quarter}-chorak`] ??= []).push(r);
+
+  const body = Object.entries(byQ).map(([q, list]) =>
+    `<b>${esc(q)}</b>\n` + list.map(r =>
+      `${r.grade}-sinf · ${esc(nameOf(r.subject_key))}` +
+      (r.topics ? ` · ${r.topics} mavzu` : '')
+    ).join('\n')
+  ).join('\n\n') || '—';
+
+  const kb = new InlineKeyboard();
+  if (offset > 0) kb.text('⬅️', `a:plans:${offset - 20}`);
+  kb.text(`${page}/${pages}`, 'a:noop');
+  if (offset + 20 < total) kb.text('➡️', `a:plans:${offset + 20}`);
+  kb.row().text('📚 Reja qo\'shish', 'a:plan').text('🛠 Panel', 'a:panel');
+
+  const text = `🗂 <b>Rejalar bazasi</b> · ${total} ta\n\n${body}`;
+  const opts = { parse_mode: 'HTML', reply_markup: kb };
+  if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
+  return ctx.reply(text, opts);
 }

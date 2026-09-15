@@ -13,6 +13,7 @@ import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
 import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import * as admin from './admin.js';
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
@@ -302,6 +303,21 @@ bot.on('message:text', async (ctx, next) => {
     return ctx.reply(t(lang, 'topup_wait_shot'), { parse_mode: 'HTML' });
   }
 
+  if (id === ADMIN_ID && f.kind === 'plan' && f.stage === 'newsubject') {
+    const [uz, ru] = text.split('|').map(x => x.trim());
+    if (!uz) return ctx.reply('Nomini yozing.');
+
+    const key = 'x-' + uz.toLowerCase()
+      .replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-|-$/g, '').slice(0, 30);
+
+    await db.addSubject(key, uz, ru || uz, [uz, ru].filter(Boolean));
+    await admin.loadExtraSubjects().catch(() => {});
+    f.subject = key;
+    f.stage = 'quarter';
+    return ctx.reply(`${f.grade}-sinf · ${esc(uz)}\n\nChorakni tanlang:`,
+      { parse_mode: 'HTML', reply_markup: admin.quartersKb() });
+  }
+
   if (id === ADMIN_ID && f.kind === 'asearch') {
     flow.delete(id);
     return admin.showSearch(ctx, text.trim());
@@ -564,6 +580,39 @@ bot.command('import', async ctx => startImport(ctx, ctx.from.id, await L(ctx.fro
 bot.on('message:document', async ctx => {
   const id = ctx.from.id;
   const lang = await L(id);
+
+  // Admin ish reja yuklayapti
+  const af = flow.get(id);
+  if (id === ADMIN_ID && af?.kind === 'plan' && af.stage === 'file') {
+    const doc = ctx.message.document;
+    if (!/\.xlsx?$/i.test(doc.file_name || '')) return ctx.reply('Faqat .xls yoki .xlsx');
+
+    af.fileId = doc.file_id;
+    af.fileName = doc.file_name;
+    af.topics = null;
+
+    // Mavzular sonini hisoblaymiz (.xlsx uchun)
+    if (/\.xlsx$/i.test(doc.file_name)) {
+      try {
+        const f = await ctx.api.getFile(doc.file_id);
+        const url = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`;
+        await fs.mkdir(TMP, { recursive: true });
+        const local = path.join(TMP, `plan_${Date.now()}.xlsx`);
+        await fs.writeFile(local, Buffer.from(await (await fetch(url)).arrayBuffer()));
+        const parsed = await readRows(local);
+        af.topics = parsed.rows.length;
+        await fs.unlink(local).catch(() => {});
+      } catch {}
+    }
+
+    af.stage = 'grade';
+    return ctx.reply(
+      `📄 ${esc(doc.file_name)}` + (af.topics ? `\n${af.topics} ta mavzu` : '') +
+      `\n\nSinfni tanlang:`,
+      { parse_mode: 'HTML', reply_markup: admin.gradesKb() }
+    );
+  }
+
   const s = live.get(id);
   if (!s || s.step !== 'await_file') return;
 
@@ -998,6 +1047,78 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return ctx.reply('➕ eMaktab loginini yozing:');
   }
 
+  // --- ish rejalar ---
+  if (cmd === 'plan') {
+    flow.set(ADMIN_ID, { kind: 'plan', stage: 'file' });
+    return ctx.reply('📚 Ish reja faylini yuboring (.xlsx yoki .xls):');
+  }
+
+  if (cmd === 'plans') return admin.showPlans(ctx, Number(parts[1]) || 0, true);
+
+  if (cmd === 'pg') {   // sinf tanlandi
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.grade = Number(parts[1]);
+    f.stage = 'subject';
+    return ctx.reply(`${f.grade}-sinf · fanni tanlang:`, { reply_markup: await admin.subjectsKb(0) });
+  }
+
+  if (cmd === 'psp') {  // fan ro'yxati sahifasi
+    return ctx.editMessageReplyMarkup({ reply_markup: await admin.subjectsKb(Number(parts[1])) });
+  }
+
+  if (cmd === 'psnew') {
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.stage = 'newsubject';
+    return ctx.reply("Fan nomini yozing (o'zbekcha va ruschasini | bilan ajrating):\n" +
+                     "<code>Astronomiya | Астрономия</code>", { parse_mode: 'HTML' });
+  }
+
+  if (cmd === 'ps') {   // fan tanlandi
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.subject = parts.slice(1).join(':');
+    f.stage = 'quarter';
+    return ctx.reply(`${f.grade}-sinf · ${admin.nameOf(f.subject)}\n\nChorakni tanlang:`,
+      { reply_markup: admin.quartersKb() });
+  }
+
+  if (cmd === 'pq') {   // chorak tanlandi -> o'quv yili
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.quarter = Number(parts[1]);
+    f.year = admin.currentYear();
+
+    return ctx.reply(
+      `${f.grade}-sinf · ${admin.nameOf(f.subject)} · ${f.quarter}-chorak\n\n` +
+      `O'quv yili:`,
+      { reply_markup: admin.yearsKb(f.year) }
+    );
+  }
+
+  if (cmd === 'py') {   // yil tanlandi -> saqlaymiz
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    const y = Number(parts[1]);
+    f.year = `${y}/${y + 1}`;
+
+    const res = await db.savePlan({
+      grade: f.grade, subjectKey: f.subject, quarter: f.quarter, year: f.year,
+      fileId: f.fileId, fileName: f.fileName, topics: f.topics,
+    });
+    flow.delete(ADMIN_ID);
+
+    return ctx.reply(
+      `${res.is_new ? '✅ Saqlandi' : '♻️ Yangilandi'}\n\n` +
+      `${f.grade}-sinf · ${admin.nameOf(f.subject)} · ${f.quarter}-chorak · ${f.year}` +
+      (f.topics ? `\n${f.topics} ta mavzu` : ''),
+      { parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text('➕ Yana qo\'shish', 'a:plan').text('🗂 Baza', 'a:plans:0') }
+    );
+  }
+
   if (cmd === 'msg') {
     return ctx.reply('✉️ Kimga yuboramiz?', { reply_markup: admin.audienceKb() });
   }
@@ -1049,5 +1170,6 @@ if (process.env.PORT) {
 bot.catch(err => console.error('bot error', err));
 
 await db.ensureSchema();
+await admin.loadExtraSubjects().catch(() => {});
 console.log('DB tayyor. Bot ishga tushyapti...');
 bot.start();

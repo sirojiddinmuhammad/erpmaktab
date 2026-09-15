@@ -66,6 +66,32 @@ create table if not exists users (
   created_at timestamptz default now()
 );
 
+create table if not exists plans (
+  id          bigserial primary key,
+  grade       int not null,
+  subject_key text not null,
+  quarter     int not null,
+  file_id     text not null,
+  file_name   text,
+  topics      int,
+  created_at  timestamptz default now(),
+  unique (grade, subject_key, quarter)
+);
+
+alter table plans add column if not exists year text;
+update plans set year = '2026/2027' where year is null;
+alter table plans drop constraint if exists plans_grade_subject_key_quarter_key;
+create unique index if not exists plans_uniq
+  on plans (grade, subject_key, quarter, year);
+
+create table if not exists subject_extra (
+  key        text primary key,
+  uz         text,
+  ru         text,
+  alias      jsonb,
+  created_at timestamptz default now()
+);
+
 create table if not exists payments (
   id bigserial primary key, tg_id bigint, amount integer,
   status text default 'pending', file_id text,
@@ -351,6 +377,65 @@ export async function ledgerRecent(tgId, n = 10) {
     `select l.delta, l.reason, l.created_at from ledger l
        join users u on u.account_id = l.account_id
       where u.tg_id = $1 order by l.id desc limit $2`, [tgId, n]);
+  return rows;
+}
+
+// ---------- ish rejalar ----------
+export async function savePlan({ grade, subjectKey, quarter, year, fileId, fileName, topics }) {
+  const { rows } = await pool.query(
+    `insert into plans (grade, subject_key, quarter, year, file_id, file_name, topics)
+     values ($1,$2,$3,$4,$5,$6,$7)
+     on conflict (grade, subject_key, quarter, year) do update
+        set file_id = excluded.file_id, file_name = excluded.file_name,
+            topics = excluded.topics, created_at = now()
+     returning *, (xmax = 0) as is_new`,
+    [grade, subjectKey, quarter, year, fileId, fileName, topics]);
+  return rows[0];
+}
+
+// Bazada mavjud o'quv yillari
+export async function planYears() {
+  const { rows } = await pool.query(
+    'select distinct year from plans where year is not null order by year desc');
+  return rows.map(r => r.year);
+}
+
+export async function listPlans(offset = 0, limit = 20, year = null) {
+  const where = year ? 'where year = $3' : '';
+  const params = year ? [limit, offset, year] : [limit, offset];
+  const { rows } = await pool.query(
+    `select * from plans ${where} order by year desc, quarter, grade, subject_key
+      limit $1 offset $2`, params);
+  const { rows: c } = await pool.query(
+    `select count(*) from plans ${year ? 'where year = $1' : ''}`, year ? [year] : []);
+  return { rows, total: Number(c[0].count) };
+}
+
+export async function getPlan(id) {
+  const { rows } = await pool.query('select * from plans where id = $1', [id]);
+  return rows[0] || null;
+}
+
+export async function deletePlan(id) {
+  await pool.query('delete from plans where id = $1', [id]);
+}
+
+export async function planStats() {
+  const { rows } = await pool.query(
+    `select quarter, count(*)::int as n from plans group by quarter order by quarter`);
+  return rows;
+}
+
+// Lug'atga qo'lda qo'shilgan fanlar
+export async function addSubject(key, uz, ru, alias = []) {
+  await pool.query(
+    `insert into subject_extra (key, uz, ru, alias) values ($1,$2,$3,$4)
+     on conflict (key) do update set uz=excluded.uz, ru=excluded.ru, alias=excluded.alias`,
+    [key, uz, ru, JSON.stringify(alias)]);
+}
+
+export async function extraSubjects() {
+  const { rows } = await pool.query('select key, uz, ru, alias from subject_extra');
   return rows;
 }
 
