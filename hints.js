@@ -1,6 +1,8 @@
 // Fayl nomidan sinf, chorak, o'quv yili va fan haqida ishora oladi.
 // Hech narsa topilmasa bo'sh obyekt qaytadi — u holda filtr ishlamaydi.
 
+import { subjectKey } from './subjects.js';
+
 const norm = t => String(t ?? '').toLowerCase().replace(/[_\s]+/g, ' ').trim();
 
 export function parseFileName(fileName) {
@@ -57,12 +59,20 @@ export function filterOptions(fieldLabel, options, hints) {
 
     case 'Предмет': {
       if (!hints.raw) return [];
-      // Fayl nomida fan nomi to'liq uchraydimi?
-      const hit = options.filter(o => {
+
+      // 1) To'g'ridan-to'g'ri: fan nomi fayl nomida uchraydimi
+      let hit = options.filter(o => {
         const n = norm(o.label);
         return n.length >= 3 && hints.raw.includes(n);
       });
-      // Bir nechta mos kelsa (masalan qisqasi uzunining ichida) — eng uzunini qoldiramiz
+
+      // 2) Lug'at orqali: fayl ruscha, sahifa o'zbekcha (yoki aksincha)
+      if (!hit.length) {
+        const fileKey = subjectKey(hints.raw);
+        if (fileKey) hit = options.filter(o => subjectKey(o.label) === fileKey);
+      }
+
+      // Bir nechta mos kelsa — eng uzunini qoldiramiz
       if (hit.length > 1) {
         const max = Math.max(...hit.map(o => o.label.length));
         return hit.filter(o => o.label.length === max);
