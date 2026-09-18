@@ -7,7 +7,7 @@ if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENC_KEY)) {
 }
 
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
-import { EmaktabSession } from './emaktab.js';
+import { EmaktabSession, FIELD_LABELS } from './emaktab.js';
 import { readRows, writeRows, parsePairs, applyMerges } from './xlsx.js';
 import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
 import { t, money, LANGS, LANG_NAME } from './i18n.js';
@@ -715,12 +715,18 @@ bot.on('message:document', async ctx => {
   }
 });
 
+// label — ichki kalit (o'zgarmaydi), find — sahifadagi yozuvlar (ikki tilda)
 const FIELDS = [
-  { label: 'Учебный год',    uz: "O'quv yili",   ru: 'учебный год' },
-  { label: 'Класс',          uz: 'Sinf',         ru: 'класс' },
-  { label: 'Предмет',        uz: 'Fan',          ru: 'предмет' },
-  { label: 'Учебная группа', uz: "O'quv guruhi", ru: 'учебную группу' },
-  { label: 'Учебный период', uz: 'Davr',         ru: 'период' },
+  { label: 'Учебный год',    find: FIELD_LABELS.year,
+    uz: "O'quv yili",   ru: 'учебный год' },
+  { label: 'Класс',          find: FIELD_LABELS.class,
+    uz: 'Sinf',         ru: 'класс' },
+  { label: 'Предмет',        find: FIELD_LABELS.subject,
+    uz: 'Fan',          ru: 'предмет' },
+  { label: 'Учебная группа', find: FIELD_LABELS.group,
+    uz: "O'quv guruhi", ru: 'учебную группу' },
+  { label: 'Учебный период', find: FIELD_LABELS.period,
+    uz: 'Davr',         ru: 'период' },
 ];
 
 async function askNext(ctx, id, lang) {
@@ -730,9 +736,9 @@ async function askNext(ctx, id, lang) {
   const field = s.fields.shift();
   if (!field) return startMapping(ctx, id, lang);
 
-  const all = await s.es.options(field.label);
+  const all = await s.es.options(field.find);
   if (!all.length) {
-    const info = await s.es.debugSelect(field.label);
+    const info = await s.es.debugSelect(field.find);
     await endSession(id);
     return ctx.reply(t(lang, 'empty_list', { field: field[lang], info }));
   }
@@ -743,9 +749,9 @@ async function askNext(ctx, id, lang) {
   const filtered = opts.length < all.length;
 
   if (all.length === 1 || (filtered && opts.length === 1 && AUTO_FIELDS.has(field.label))) {
-    await s.es.pick(field.label, opts[0].index);
+    await s.es.pick(field.find, opts[0].index);
     s.asked.push(field);
-    s.answers.push({ label: field.label, optionLabel: opts[0].label });
+    s.answers.push({ label: field.label, find: field.find, optionLabel: opts[0].label });
     s.showAllFor = null;
     return askNext(ctx, id, lang);
   }
@@ -781,9 +787,9 @@ bot.callbackQuery(/^p:(\d+)$/, async ctx => {
   await ctx.answerCallbackQuery();
   await ctx.editMessageText(`${esc(s.current[lang])}: ${esc(opt.label)} ✅`, { parse_mode: 'HTML' });
 
-  await s.es.pick(s.current.label, opt.index);
+  await s.es.pick(s.current.find, opt.index);
   s.asked.push(s.current);
-  s.answers.push({ label: s.current.label, optionLabel: opt.label });
+  s.answers.push({ label: s.current.label, find: s.current.find, optionLabel: opt.label });
   s.showAllFor = null;
   s.current = null;
   await askNext(ctx, id, lang);
@@ -989,7 +995,9 @@ async function handleMerge(ctx, id, lang, text) {
     s.rows = merged;
 
     await s.es.uploadFile(p);
-    await s.es.applyParams(s.answers.map(a => ({ label: a.label, optionLabel: a.optionLabel })));
+    await s.es.applyParams(s.answers.map(a => ({
+      label: a.label, find: a.find, optionLabel: a.optionLabel,
+    })));
     await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
     s.step = 'params';
     await startMapping(ctx, id, lang);

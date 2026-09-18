@@ -20,6 +20,44 @@ const COLUMN_RULES = [
   },
 ];
 
+// eMaktab interfeysi ikki tilda. Barcha so'zlar saytdan olingan.
+const W = {
+  next:      ['Далее', 'Keyingi qadam'],
+  back:      ['Назад', 'Orqaga'],
+  import:    ['Импортировать', 'Import qilish'],
+  cancelImp: ['Отменить импорт этого файла',
+              "Ushbu faylni import qilishni (ko'chirishni) bekor qilish",
+              'bekor qilish'],
+
+  // Ustun moslash variantlari
+  lessonNo:  [/номер\s*урока/i, /dars\s*raqami/i, /дарс\s*рақами/i],
+  topic:     [/тема\s*урока/i, /dars\s*mavzusi/i, /дарс\s*мавзуси/i],
+  homework:  [/домашнее\s*задание/i, /uy\s*vazifasi/i, /уй\s*вазифаси/i],
+
+  // 3-qadam jadvali
+  check:     [/предварительная|проверк/i, /tekshir/i],
+  ready:     [/готов/i, /tayyor/i],
+  error:     [/ошибк/i, /xato/i, /хато/i],
+
+  // Bo'sh tanlov
+  empty:     [/^(не выбрано|не выбран|tanlanmagan|танланмаган|—|-)$/i],
+
+  // Profil
+  staff:     [/^(Сотрудник|Учитель)$/i, /^(Xodim|O.qituvchi)$/i],
+  skipName:  /Помощь|Выход|Сотрудник|Учитель|Yordam|Chiqish|Xodim|O.qituvchi/i,
+};
+
+// Parametr maydonlari: ruscha va o'zbekcha yozuvlari
+export const FIELD_LABELS = {
+  year:    ['Учебный год', "O'quv yili", "O‘quv yili"],
+  class:   ['Класс', 'Sinf'],
+  subject: ['Предмет', 'Fan'],
+  group:   ['Учебная группа', "O'quv guruhi", "O‘quv guruhi"],
+  period:  ['Учебный период', "O'quv davri", "O‘quv davri"],
+};
+
+const reAny = list => list.map(r => (r instanceof RegExp ? r.source : r)).join('|');
+
 // Eski kod uchun moslik (mapColumns ichida ishlatiladi)
 const COLUMN_MAP = Object.fromEntries(COLUMN_RULES.map(r => [r.target, r.target]));
 
@@ -62,9 +100,9 @@ export class EmaktabSession {
 
   // Label matni bo'yicha undan keyingi birinchi <select>
   sel(label) {
-    return this.page.locator(
-      `xpath=//*[normalize-space(text())="${label}"]/following::select[1]`
-    );
+    const list = Array.isArray(label) ? label : [label];
+    const cond = list.map(l => `normalize-space(text())="${l}"`).join(' or ');
+    return this.page.locator(`xpath=//*[${cond}]/following::select[1]`);
   }
 
   // Sayt ishlayaptimi? Texnik ishlar yoki server xatosini aniqlaydi.
@@ -98,15 +136,21 @@ export class EmaktabSession {
 
   // Tugmani bir necha usulda qidiradi: matn, input value, button, link.
   // eMaktabda "Далее >" ba'zan <input type=submit value="Далее >"> bo'ladi.
-  async clickButton(word, { timeout = 15000 } = {}) {
+  // words — bir necha tildagi variantlar
+  async clickButton(words, { timeout = 15000 } = {}) {
     const page = this.page;
-    const tries = [
-      `input[type="submit"][value*="${word}"]`,
-      `input[type="button"][value*="${word}"]`,
-      `button:has-text("${word}")`,
-      `a:has-text("${word}")`,
-      `text=${word}`,
-    ];
+    const list = Array.isArray(words) ? words : [words];
+
+    const tries = [];
+    for (const w of list) {
+      tries.push(
+        `input[type="submit"][value*="${w}"]`,
+        `input[type="button"][value*="${w}"]`,
+        `button:has-text("${w}")`,
+        `a:has-text("${w}")`,
+        `text=${w}`,
+      );
+    }
 
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
@@ -126,7 +170,7 @@ export class EmaktabSession {
     const info = await page.evaluate(() =>
       document.body.innerText.replace(/\n{2,}/g, '\n').slice(0, 400)
     ).catch(() => '');
-    throw new Error(`"${word}" tugmasi topilmadi.\n\n${info}`);
+    throw new Error(`"${list[0]}" tugmasi topilmadi.\n\n${info}`);
   }
 
   // Sahifa tinchishini kutish. networkidle ishlatmaymiz —
@@ -346,18 +390,20 @@ export class EmaktabSession {
         // Sahifada xato chiqdimi?
         const err = await page.evaluate(() => {
           const t = document.body.innerText;
-          const m = t.match(/[^\n]*(не поддерж|неверн|ошибк|формат)[^\n]*/i);
+          const m = t.match(
+            /[^\n]*(не поддерж|неверн|ошибк|формат|qo.llab-quvvatlanmaydi|noto.g.ri|xato|format)[^\n]*/i
+          );
           return m ? m[0].trim() : '';
         }).catch(() => '');
-        if (err && !/Ошибка!/.test(err)) throw new Error(`eMaktab: ${err}`);
+        if (err && !/Ошибка!|Xato!/.test(err)) throw new Error(`eMaktab: ${err}`);
 
-        await this.clickButton('Далее');
+        await this.clickButton(W.next);
         await this.settle(400);
         return;
       }
 
       // Yo'q bo'lsa: yarim qolgan importni bekor qilamiz va qaytadan urinamiz
-      const cancel = page.locator('text=Отменить импорт этого файла');
+      const cancel = page.locator(W.cancelImp.map(w => `text=${w}`).join(', '));
       if (await cancel.count()) {
         await cancel.first().click().catch(() => {});
         await this.settle(1000);
@@ -398,7 +444,7 @@ export class EmaktabSession {
         list
           .map((o, index) => ({ index, value: o.value, label: o.textContent.trim() }))
           // Faqat matn bo'yicha filtr: "Весь класс" kabi variantlarda value bo'sh bo'lishi mumkin
-          .filter(o => o.label && !/^(Не выбрано|Не выбран|—|-)$/i.test(o.label))
+          .filter(o => o.label && !/^(не выбрано|не выбран|tanlanmagan|танланмаган|—|-)$/i.test(o.label))
       );
       if (last.length) return last;
       await this.page.waitForTimeout(500);
@@ -409,7 +455,8 @@ export class EmaktabSession {
   // Diagnostika: select bo'sh chiqqanda nima borligini ko'rsatadi
   async debugSelect(label) {
     const s = this.sel(label);
-    if (!(await s.count())) return `"${label}" uchun select topilmadi`;
+    const name = Array.isArray(label) ? label.join(' / ') : label;
+    if (!(await s.count())) return `"${name}" uchun select topilmadi`;
     const raw = await s.locator('option').evaluateAll(l =>
       l.map(o => `[${o.value}] ${o.textContent.trim()}`).join(' // ')
     );
@@ -421,7 +468,10 @@ export class EmaktabSession {
   // Barcha selectlarni xom holda ko'rsatadi (/debug uchun)
   async dumpAll(labels) {
     const out = [];
-    for (const l of labels) out.push(`${l}: ${await this.debugSelect(l)}`);
+    for (const l of labels) {
+      const name = Array.isArray(l) ? l[0] : l;
+      out.push(`${name}: ${await this.debugSelect(l)}`);
+    }
     return out.join('\n\n');
   }
 
@@ -433,21 +483,23 @@ export class EmaktabSession {
 
   // ---- ustun mosligi: avtomatik ----
   async mapColumns() {
-    await this.page.waitForFunction(() =>
-      [...document.querySelectorAll('select')].some(s =>
-        [...s.options].some(o => /номер\s*урока/i.test(o.textContent))
-      ), null, { timeout: 30000 }
-    ).catch(() => {});
+    const lessonRe = reAny(W.lessonNo);
+    await this.page.waitForFunction((src) => {
+      const re = new RegExp(src, 'i');
+      return [...document.querySelectorAll('select')].some(s =>
+        [...s.options].some(o => re.test(o.textContent)));
+    }, lessonRe, { timeout: 30000 }).catch(() => {});
 
     const rules = COLUMN_RULES.map(r => ({ target: r.target, src: r.re.source, flags: r.re.flags }));
 
-    const plan = await this.page.evaluate(({ rules }) => {
+    const plan = await this.page.evaluate(({ rules, lessonRe, targets }) => {
       const norm = t => (t || '').replace(/\s+/g, ' ').trim();
+      const reL = new RegExp(lessonRe, 'i');
       const all = [...document.querySelectorAll('select')];
 
       const mapping = all
         .map((sel, idx) => ({ sel, idx }))
-        .filter(({ sel }) => [...sel.options].some(o => /номер\s*урока/i.test(o.textContent)));
+        .filter(({ sel }) => [...sel.options].some(o => reL.test(o.textContent)));
 
       if (!mapping.length) {
         return { actions: [], report: [`Moslash selectlari topilmadi. Sahifada ${all.length} ta select bor.`] };
@@ -478,8 +530,8 @@ export class EmaktabSession {
         if (!rule) continue;
 
         const opts = [...m.sel.options];
-        let oi = opts.findIndex(o => norm(o.textContent).toLowerCase() === rule.target.toLowerCase());
-        if (oi === -1) oi = opts.findIndex(o => norm(o.textContent).toLowerCase().includes(rule.target.toLowerCase()));
+        const tre = new RegExp(targets[rule.target], 'i');
+        let oi = opts.findIndex(o => tre.test(norm(o.textContent)));
         if (oi === -1) { report.push(`${label}: "${rule.target}" varianti yo'q`); continue; }
 
         used.add(m.idx);
@@ -493,7 +545,8 @@ export class EmaktabSession {
         mapping.forEach((m, i) => {
           if (used.has(m.idx) || i >= order.length) return;
           const opts = [...m.sel.options];
-          const oi = opts.findIndex(o => norm(o.textContent).toLowerCase().includes(order[i].toLowerCase()));
+          const ore = new RegExp(targets[order[i]], 'i');
+          const oi = opts.findIndex(o => ore.test(norm(o.textContent)));
           if (oi === -1) return;
           used.add(m.idx);
           actions.push({ selectIndex: m.idx, optionIndex: oi });
@@ -502,7 +555,15 @@ export class EmaktabSession {
       }
 
       return { actions, report };
-    }, { rules });
+    }, {
+      rules,
+      lessonRe,
+      targets: {
+        'Номер урока': reAny(W.lessonNo),
+        'Тема урока': reAny(W.topic),
+        'Домашнее задание': reAny(W.homework),
+      },
+    });
 
     for (const a of plan.actions) {
       await this.page.locator('select').nth(a.selectIndex).selectOption({ index: a.optionIndex });
@@ -514,13 +575,15 @@ export class EmaktabSession {
 
   // Qo'lda moslash uchun: moslash selectlari va ularning variantlari
   async mappingSelects() {
-    await this.page.waitForFunction(() =>
-      [...document.querySelectorAll('select')].some(s =>
-        [...s.options].some(o => /номер\\s*урока/i.test(o.textContent))
-      ), null, { timeout: 20000 }
-    ).catch(() => {});
+    const lre = reAny(W.lessonNo);
+    await this.page.waitForFunction((src) => {
+      const re = new RegExp(src, 'i');
+      return [...document.querySelectorAll('select')].some(s =>
+        [...s.options].some(o => re.test(o.textContent)));
+    }, lre, { timeout: 20000 }).catch(() => {});
 
-    return await this.page.evaluate(() => {
+    return await this.page.evaluate((src) => {
+      const reL = new RegExp(src, 'i');
       const all = [...document.querySelectorAll('select')];
       const labelOf = sel => {
         const tr = sel.closest('tr');
@@ -532,13 +595,13 @@ export class EmaktabSession {
       };
       return all
         .map((sel, selectIndex) => ({ sel, selectIndex }))
-        .filter(({ sel }) => [...sel.options].some(o => /номер\\s*урока/i.test(o.textContent)))
+        .filter(({ sel }) => [...sel.options].some(o => reL.test(o.textContent)))
         .map(({ sel, selectIndex }) => ({
           selectIndex,
           label: labelOf(sel) || `Ustun ${selectIndex}`,
           options: [...sel.options].map((o, index) => ({ index, label: o.textContent.trim() })),
         }));
-    });
+    }, lre);
   }
 
   async setSelect(selectIndex, optionIndex) {
@@ -547,18 +610,29 @@ export class EmaktabSession {
 
   // Moslashdan keyin "Далее" ni bosish (qo'lda rejim uchun alohida)
   async submitMapping() {
-    await this.clickButton('Далее');
+    await this.clickButton(W.next);
     await this.page.waitForSelector('table tr', { timeout: 30000 }).catch(() => {});
     await this.settle(400);
   }
 
   // ---- 3-qadam: tekshiruv jadvali ----
   async preview() {
-    const data = await this.page.evaluate(() => {
+    const R = {
+      lesson: reAny(W.lessonNo), topic: reAny(W.topic), hw: reAny(W.homework),
+      check: reAny(W.check), ready: reAny(W.ready), error: reAny(W.error),
+    };
+
+    const data = await this.page.evaluate((R) => {
       const norm = t => (t || '').replace(/\s+/g, ' ').trim();
+      const reTopic  = new RegExp(R.topic, 'i');
+      const reLesson = new RegExp(R.lesson, 'i');
+      const reHw     = new RegExp(R.hw, 'i');
+      const reCheck  = new RegExp(R.check, 'i');
+      const reReady  = new RegExp(R.ready, 'i');
+      const reError  = new RegExp(R.error, 'i');
 
       const table = [...document.querySelectorAll('table')]
-        .find(t => /Тема\s*урока/i.test(t.textContent));
+        .find(t => reTopic.test(t.textContent));
       if (!table) return { rows: [] };
 
       const trs = [...table.querySelectorAll('tr')];
@@ -567,12 +641,12 @@ export class EmaktabSession {
       let col = null;
       for (const tr of trs) {
         const cells = [...tr.querySelectorAll('th, td')].map(c => norm(c.textContent));
-        if (cells.some(c => /Тема\s*урока/i.test(c))) {
+        if (cells.some(c => reTopic.test(c))) {
           col = {
-            lesson: cells.findIndex(c => /№\s*урока/i.test(c)),
-            topic:  cells.findIndex(c => /Тема\s*урока/i.test(c)),
-            hw:     cells.findIndex(c => /Домашнее\s*задание/i.test(c)),
-            status: cells.findIndex(c => /Предварительная|проверк/i.test(c)),
+            lesson: cells.findIndex(c => reLesson.test(c) || /^№/.test(c)),
+            topic:  cells.findIndex(c => reTopic.test(c)),
+            hw:     cells.findIndex(c => reHw.test(c)),
+            status: cells.findIndex(c => reCheck.test(c)),
           };
           break;
         }
@@ -592,8 +666,12 @@ export class EmaktabSession {
         // MUHIM: holat faqat o'z ustunidan o'qiladi.
         // Mavzu nomida "ошибками" kabi so'z bo'lishi mumkin — u xato emas.
         const statusCell = col.status !== -1 ? pick(col.status) : cells.at(-1);
-        const isOk = /Готов/i.test(statusCell);
-        const isError = !isOk && /Ошибк|Xato/i.test(statusCell);
+
+        // "Xato!" / "Ошибка!" alohida ustunda turishi mumkin.
+        // Aniq tenglik: "Работа над ошибками" kabi mavzularga tushmaydi.
+        const markError = cells.some(c => /^(xato|хато|ошибка)\s*!?$/i.test(c));
+        const isError = markError || reError.test(statusCell);
+        const isOk = !isError && reReady.test(statusCell);
 
         const lesson = pick(col.lesson);
 
@@ -603,11 +681,11 @@ export class EmaktabSession {
           topic: pick(col.topic),
           hw: pick(col.hw),
           ok: isOk,
-          status: statusCell || (isError ? 'Xato' : ''),
+          status: statusCell || cells.at(-1) || (isError ? 'Xato' : ''),
         });
       }
       return { rows };
-    });
+    }, R);
 
     const rows = data.rows || [];
     let diag = '';
@@ -623,7 +701,7 @@ export class EmaktabSession {
 
   // ---- 4-qadam ----
   async confirmImport() {
-    await this.clickButton('Импортировать');
+    await this.clickButton(W.import);
     await this.settle(3000);
     return await this.page.screenshot({ fullPage: false });
   }
