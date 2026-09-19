@@ -100,6 +100,11 @@ create table if not exists subject_extra (
 alter table subject_extra add column if not exists sort int default 100;
 alter table subject_extra add column if not exists seeded boolean default false;
 
+create table if not exists meta (
+  key   text primary key,
+  value text
+);
+
 create table if not exists payments (
   id bigserial primary key, tg_id bigint, amount integer,
   status text default 'pending', file_id text,
@@ -465,17 +470,22 @@ export async function planStats() {
 // Birinchi ishga tushishda kodagi lug'at bazaga ko'chiriladi.
 // Shundan keyin fanlar faqat bazada boshqariladi.
 export async function seedSubjects(list) {
-  const { rows } = await pool.query('select count(*) from subject_extra');
-  if (Number(rows[0].count) > 0) return 0;
+  // Bir marta bajariladi. Belgi meta jadvalida — fanlar o'chirilsa ham qaytmaydi.
+  const { rows } = await pool.query("select value from meta where key = 'subjects_seeded'");
+  if (rows[0]) return 0;
 
   let n = 0;
   for (const [i, s] of list.entries()) {
-    await pool.query(
+    const r = await pool.query(
       `insert into subject_extra (key, uz, ru, alias, sort, seeded)
-       values ($1,$2,$3,$4,$5,true) on conflict (key) do nothing`,
+       values ($1,$2,$3,$4,$5,true) on conflict (key) do nothing returning key`,
       [s.key, s.uz, s.ru, JSON.stringify(s.alias || []), i]);
-    n++;
+    if (r.rows[0]) n++;
   }
+
+  await pool.query(
+    "insert into meta (key, value) values ('subjects_seeded', now()::text) " +
+    "on conflict (key) do nothing");
   return n;
 }
 

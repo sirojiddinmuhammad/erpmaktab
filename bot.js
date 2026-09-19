@@ -1517,6 +1517,7 @@ if (process.env.PORT) {
 bot.catch(err => console.error('bot error', err));
 
 await db.ensureSchema();
-await admin.loadExtraSubjects().catch(() => {});
+const subjCount = await admin.loadExtraSubjects().catch(() => 0);
+console.log(`Fanlar bazada: ${subjCount} ta`);
 console.log('DB tayyor. Bot ishga tushyapti...');
 bot.start();
