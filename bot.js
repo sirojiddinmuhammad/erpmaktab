@@ -319,6 +319,45 @@ bot.on('message:text', async (ctx, next) => {
       { parse_mode: 'HTML', reply_markup: admin.quartersKb() });
   }
 
+  if (id === ADMIN_ID && f.kind === 'subnew') {
+    const [uz, ru] = text.split('|').map(x => x.trim());
+    if (!uz) return ctx.reply('Nomini yozing.');
+
+    const key = 'x-' + uz.toLowerCase()
+      .replace(/[^a-z0-9а-яё]+/gi, '-').replace(/^-|-$/g, '').slice(0, 30);
+
+    await db.addSubject(key, uz, ru || uz, [uz, ru].filter(Boolean));
+    await admin.loadExtraSubjects();
+    flow.delete(id);
+    return ctx.reply(`✅ Qo'shildi: ${esc(uz)}`,
+      { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
+  }
+
+  if (id === ADMIN_ID && f.kind === 'subedit') {
+    const [uz, ru] = text.split('|').map(x => x.trim());
+    if (!uz) return ctx.reply('Nomini yozing.');
+    await db.updateSubject(f.key, { uz, ru: ru || null });
+    await admin.loadExtraSubjects();
+    flow.delete(id);
+    return ctx.reply(`✅ O'zgartirildi: ${esc(uz)}`,
+      { parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
+  }
+
+  if (id === ADMIN_ID && f.kind === 'subalias') {
+    const add = text.split(',').map(x => x.trim()).filter(Boolean);
+    if (!add.length) return ctx.reply("So'zlarni vergul bilan yozing.");
+
+    const s = await db.getSubject(f.key);
+    const alias = [...new Set([...(s?.alias || []), ...add])];
+    await db.updateSubject(f.key, { alias });
+    await admin.loadExtraSubjects();
+    flow.delete(id);
+    return ctx.reply(`✅ Qo'shildi: ${esc(add.join(', '))}`,
+      { parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
+  }
+
   if (id === ADMIN_ID && f.kind === 'asearch') {
     flow.delete(id);
     return admin.showSearch(ctx, text.trim());
@@ -1096,6 +1135,60 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
   if (cmd === 'adj') {
     flow.set(ADMIN_ID, { kind: 'adj_login' });
     return ctx.reply('➕ eMaktab loginini yozing:');
+  }
+
+  // --- ish rejalar bo'limi ---
+  if (cmd === 'plans_menu')
+    return ctx.reply('📚 <b>Ish rejalar</b>',
+      { parse_mode: 'HTML', reply_markup: admin.plansMenuKb() });
+
+  // --- fanlar ro'yxati ---
+  if (cmd === 'subs') return admin.showSubjects(ctx, Number(parts[1]) || 0, true);
+  if (cmd === 'sv')   return admin.showSubject(ctx, parts[1], Number(parts[2]) || 0);
+
+  if (cmd === 'snew') {
+    flow.set(ADMIN_ID, { kind: 'subnew' });
+    return ctx.reply("Yangi fan nomini yozing:\n<code>Astronomiya | Астрономия</code>",
+      { parse_mode: 'HTML' });
+  }
+
+  if (cmd === 'sed') {
+    flow.set(ADMIN_ID, { kind: 'subedit', key: parts[1] });
+    return ctx.reply("Yangi nomni yozing:\n<code>O'zbekcha | Ruscha</code>",
+      { parse_mode: 'HTML' });
+  }
+
+  if (cmd === 'sal') {
+    flow.set(ADMIN_ID, { kind: 'subalias', key: parts[1] });
+    return ctx.reply(
+      "Tanish so'zlarni vergul bilan yozing:\n<code>Тех. труд, Mehnat</code>\n\n" +
+      "<i>Bu so'zlar eMaktabda yoki fayl nomida uchrasa, shu fanga biriktiriladi.</i>",
+      { parse_mode: 'HTML' });
+  }
+
+  if (cmd === 'sdel') {
+    const n = await db.countPlansBySubject(parts[1]);
+    if (!n) {
+      await db.deleteSubject(parts[1]);
+      await admin.loadExtraSubjects();
+      return ctx.reply("🗑 O'chirildi.",
+        { reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
+    }
+    return ctx.reply(
+      `⚠️ Bu fanda <b>${n} ta reja</b> bor.\n\nNima qilamiz?`,
+      { parse_mode: 'HTML',
+        reply_markup: new InlineKeyboard()
+          .text('🗑 Fan va rejalarni', `a:sdy:${parts[1]}:1`).row()
+          .text('🗑 Faqat fanni', `a:sdy:${parts[1]}:0`).row()
+          .text('❌ Bekor', `a:sv:${parts[1]}:0`) }
+    );
+  }
+
+  if (cmd === 'sdy') {
+    await db.deleteSubject(parts[1], parts[2] === '1');
+    await admin.loadExtraSubjects();
+    return ctx.reply("🗑 O'chirildi.",
+      { reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
   }
 
   // --- ommaviy yuklash ---

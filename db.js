@@ -97,6 +97,8 @@ create table if not exists subject_extra (
   alias      jsonb,
   created_at timestamptz default now()
 );
+alter table subject_extra add column if not exists sort int default 100;
+alter table subject_extra add column if not exists seeded boolean default false;
 
 create table if not exists payments (
   id bigserial primary key, tg_id bigint, amount integer,
@@ -459,17 +461,62 @@ export async function planStats() {
   return rows;
 }
 
-// Lug'atga qo'lda qo'shilgan fanlar
+// ---------- fanlar (baza yagona manba) ----------
+// Birinchi ishga tushishda kodagi lug'at bazaga ko'chiriladi.
+// Shundan keyin fanlar faqat bazada boshqariladi.
+export async function seedSubjects(list) {
+  const { rows } = await pool.query('select count(*) from subject_extra');
+  if (Number(rows[0].count) > 0) return 0;
+
+  let n = 0;
+  for (const [i, s] of list.entries()) {
+    await pool.query(
+      `insert into subject_extra (key, uz, ru, alias, sort, seeded)
+       values ($1,$2,$3,$4,$5,true) on conflict (key) do nothing`,
+      [s.key, s.uz, s.ru, JSON.stringify(s.alias || []), i]);
+    n++;
+  }
+  return n;
+}
+
 export async function addSubject(key, uz, ru, alias = []) {
   await pool.query(
-    `insert into subject_extra (key, uz, ru, alias) values ($1,$2,$3,$4)
-     on conflict (key) do update set uz=excluded.uz, ru=excluded.ru, alias=excluded.alias`,
+    `insert into subject_extra (key, uz, ru, alias, sort) values ($1,$2,$3,$4,999)
+     on conflict (key) do update
+        set uz=excluded.uz, ru=excluded.ru, alias=excluded.alias`,
     [key, uz, ru, JSON.stringify(alias)]);
 }
 
 export async function extraSubjects() {
-  const { rows } = await pool.query('select key, uz, ru, alias from subject_extra');
+  const { rows } = await pool.query(
+    'select key, uz, ru, alias, sort, seeded from subject_extra order by sort, uz');
   return rows;
+}
+
+export async function getSubject(key) {
+  const { rows } = await pool.query('select * from subject_extra where key = $1', [key]);
+  return rows[0] || null;
+}
+
+export async function updateSubject(key, { uz, ru, alias }) {
+  await pool.query(
+    `update subject_extra
+        set uz = coalesce($2, uz), ru = coalesce($3, ru),
+            alias = coalesce($4, alias)
+      where key = $1`,
+    [key, uz ?? null, ru ?? null, alias ? JSON.stringify(alias) : null]);
+}
+
+export async function countPlansBySubject(key) {
+  const { rows } = await pool.query(
+    'select count(*) from plans where subject_key = $1', [key]);
+  return Number(rows[0].count);
+}
+
+// withPlans: rejalarni ham o'chirish
+export async function deleteSubject(key, withPlans = false) {
+  if (withPlans) await pool.query('delete from plans where subject_key = $1', [key]);
+  await pool.query('delete from subject_extra where key = $1', [key]);
 }
 
 // ---------- admin ro'yxatlari ----------

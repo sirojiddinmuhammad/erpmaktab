@@ -4,21 +4,47 @@ import * as db from './db.js';
 import { money } from './i18n.js';
 import { SUBJECTS, COMBOS, subjectName } from './subjects.js';
 
-// Qo'lda qo'shilgan fanlar (bazadan), nom topish uchun
-const extraNames = new Map();
+// Fanlar bazada saqlanadi. Kodagi lug'at faqat birinchi to'ldirish uchun.
+const subjCache = new Map();
 
 export async function loadExtraSubjects() {
+  // Birinchi marta: kodagi lug'atni bazaga ko'chiramiz
+  await db.seedSubjects([...SUBJECTS, ...COMBOS].map(s => ({
+    key: s.key, uz: s.uz, ru: s.ru, alias: s.alias || [],
+  })));
+
   const rows = await db.extraSubjects();
-  extraNames.clear();
-  for (const r of rows) extraNames.set(r.key, { uz: r.uz, ru: r.ru });
+  subjCache.clear();
+  for (const r of rows) subjCache.set(r.key, r);
   return rows.length;
 }
 
-// Lug'atdan yoki bazadan fan nomini oladi
+export const allSubjects = () => [...subjCache.values()];
+
 export function nameOf(key, lang = 'uz') {
-  const e = extraNames.get(key);
-  if (e) return e[lang] || e.uz || key;
-  return subjectName(key, lang);
+  const e = subjCache.get(key);
+  if (e) return (lang === 'ru' ? e.ru : e.uz) || e.uz || key;
+  return subjectName(key, lang);   // zaxira
+}
+
+// Bazadagi tanish so'zlar bo'yicha kalit topish
+export function keyOfName(name) {
+  const norm = t => String(t || '').toLowerCase().replace(/[’`]/g, "'")
+    .replace(/\s+/g, ' ').trim();
+  const n = norm(name);
+  if (!n) return null;
+
+  for (const s of subjCache.values()) {
+    if (norm(s.uz) === n || norm(s.ru) === n || norm(s.key) === n) return s.key;
+    for (const a of s.alias || []) if (norm(a) === n) return s.key;
+  }
+  for (const s of subjCache.values()) {
+    for (const a of [s.uz, s.ru, ...(s.alias || [])]) {
+      const x = norm(a);
+      if (x.length >= 5 && (n.includes(x) || x.includes(n))) return s.key;
+    }
+  }
+  return null;
 }
 
 const PAGE = 30;
@@ -45,9 +71,7 @@ export function panelKb() {
     .text('⭐ Obunachilar', 'a:l:subs:0').text('💰 Balansi borlar', 'a:l:money:0').row()
     .text('🔗 Hisob ulaganlar', 'a:l:linked:0').text('📤 Import qilganlar', 'a:l:imported:0').row()
     .text('👻 Faol emaslar', 'a:l:idle:0').text('➕ Balans', 'a:adj').row()
-    .text('📚 Reja qo\'shish', 'a:plan').text('📦 Ommaviy yuklash', 'a:bulk').row()
-    .text('🗂 Rejalar bazasi', 'a:pfilt').row()
-    .text('✉️ Xabar', 'a:msg');
+    .text('📚 Ish rejalar', 'a:plans_menu').text('✉️ Xabar', 'a:msg');
 }
 
 const hasSub = r => r.sub_until && new Date(r.sub_until) >= new Date();
@@ -285,12 +309,7 @@ export function gradesKb() {
 
 export async function subjectsKb(page = 0, medium = 'uz') {
   const L = medium === 'ru' ? 'ru' : 'uz';
-  const extra = await db.extraSubjects();
-  const all = [
-    ...SUBJECTS.map(s => ({ key: s.key, uz: s[L] || s.uz })),
-    ...COMBOS.map(s => ({ key: s.key, uz: s[L] || s.uz })),
-    ...extra.map(s => ({ key: s.key, uz: s[L] || s.uz || s.key })),
-  ].filter((s, i, arr) => arr.findIndex(x => x.key === s.key) === i);
+  const all = allSubjects().map(s => ({ key: s.key, uz: s[L] || s.uz || s.key }));
 
   const pages = Math.max(1, Math.ceil(all.length / SUBJ_PAGE));
   const slice = all.slice(page * SUBJ_PAGE, (page + 1) * SUBJ_PAGE);
@@ -421,12 +440,7 @@ export function bulkGradeKb(guess) {
 // Fan tugmalari: taxmin qilingani tepada
 export async function bulkSubjectKb(page = 0, medium = 'uz', guess = null) {
   const L = medium === 'ru' ? 'ru' : 'uz';
-  const extra = await db.extraSubjects();
-  let all = [
-    ...SUBJECTS.map(s => ({ key: s.key, name: s[L] || s.uz })),
-    ...COMBOS.map(s => ({ key: s.key, name: s[L] || s.uz })),
-    ...extra.map(s => ({ key: s.key, name: s[L] || s.uz || s.key })),
-  ].filter((s, i, arr) => arr.findIndex(x => x.key === s.key) === i);
+  let all = allSubjects().map(s => ({ key: s.key, name: s[L] || s.uz || s.key }));
 
   if (guess) {
     const hit = all.find(s => s.key === guess);
@@ -446,4 +460,67 @@ export async function bulkSubjectKb(page = 0, medium = 'uz', guess = null) {
   kb.text(`${page + 1}/${pages}`, 'a:noop');
   if (page + 1 < pages) kb.text('➡️', `a:bsp:${page + 1}`);
   return kb.row().text('⏭ O\'tkazish', 'a:bskip').text('❌ To\'xtatish', 'a:bstop');
+}
+
+
+// ---------- fanlar ro'yxati ----------
+const SUBJ_LIST_PAGE = 15;
+
+export async function showSubjects(ctx, offset = 0, edit = false) {
+  const all = allSubjects();
+  const total = all.length;
+  const slice = all.slice(offset, offset + SUBJ_LIST_PAGE);
+  const pages = Math.max(1, Math.ceil(total / SUBJ_LIST_PAGE));
+  const page = Math.floor(offset / SUBJ_LIST_PAGE) + 1;
+
+  const body = slice.map((s, i) =>
+    `${i + 1}. ${esc(s.uz || s.key)} / ${esc(s.ru || '—')}` + (s.seeded ? '' : ' ✏️')
+  ).join('\n') || '—';
+
+  const kb = new InlineKeyboard();
+  slice.forEach((s, i) => {
+    kb.text(`${i + 1}`, `a:sv:${s.key}:${offset}`);
+    if (i % 5 === 4) kb.row();
+  });
+  kb.row();
+  if (offset > 0) kb.text('⬅️', `a:subs:${offset - SUBJ_LIST_PAGE}`);
+  kb.text(`${page}/${pages}`, 'a:noop');
+  if (offset + SUBJ_LIST_PAGE < total) kb.text('➡️', `a:subs:${offset + SUBJ_LIST_PAGE}`);
+  kb.row().text('➕ Fan qo\'shish', 'a:snew').text('📚 Ish rejalar', 'a:plans_menu');
+
+  const text = `📖 <b>Fanlar</b> · ${total} ta\n\n${body}`;
+  const opts = { parse_mode: 'HTML', reply_markup: kb };
+  if (edit) return ctx.editMessageText(text, opts).catch(() => ctx.reply(text, opts));
+  return ctx.reply(text, opts);
+}
+
+export async function showSubject(ctx, key, backOffset = 0) {
+  const s = await db.getSubject(key);
+  if (!s) return ctx.reply('Fan topilmadi.');
+
+  const n = await db.countPlansBySubject(key);
+  const alias = (s.alias || []).filter(a => a && a !== s.uz && a !== s.ru);
+
+  await ctx.reply(
+    `📖 <b>${esc(s.uz || key)}</b>\n` +
+    `🇺🇿 ${esc(s.uz || '—')}\n🇷🇺 ${esc(s.ru || '—')}\n` +
+    (alias.length ? `Tanish so'zlar: ${esc(alias.join(', '))}\n` : '') +
+    `\nBazada: ${n} ta reja`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: new InlineKeyboard()
+        .text('✏️ Nomini o\'zgartirish', `a:sed:${key}`).row()
+        .text('🏷 Tanish so\'z qo\'shish', `a:sal:${key}`).row()
+        .text('🗑 O\'chirish', `a:sdel:${key}`)
+        .text('⬅️ Orqaga', `a:subs:${backOffset}`),
+    }
+  );
+}
+
+// Ish rejalar bo'limi menyusi
+export function plansMenuKb() {
+  return new InlineKeyboard()
+    .text('➕ Reja qo\'shish', 'a:plan').text('📦 Ommaviy yuklash', 'a:bulk').row()
+    .text('🗂 Rejalar bazasi', 'a:pfilt').text('📖 Fanlar ro\'yxati', 'a:subs:0').row()
+    .text('🛠 Panel', 'a:panel');
 }
