@@ -229,6 +229,40 @@ export function mediumKb() {
 
 export const MEDIUM_FLAG = { uz: '🇺🇿', ru: '🇷🇺' };
 
+// O'zbekcha BSB/CHSB, ruscha СОР/СОЧ — bitta tushuncha, ikki nom
+const GRADING_LABEL = {
+  uz: { normal: 'Oddiy baholash', bsb: 'BSB / CHSB' },
+  ru: { normal: 'Обычное оценивание', bsb: 'СОР / СОЧ' },
+};
+
+export const gradingName = (key, medium = 'uz') =>
+  (GRADING_LABEL[medium === 'ru' ? 'ru' : 'uz'])[key || 'normal'];
+
+export const gradingTag = (key, medium = 'uz') =>
+  key === 'bsb' ? (medium === 'ru' ? ' · СОР/СОЧ' : ' · BSB/CHSB') : '';
+
+// Eski kod uchun moslik
+export const GRADING_NAME = GRADING_LABEL.uz;
+
+// Fayl nomida BSB bo'lsa taxmin qilinadi, lekin baribir tasdiqlanadi
+export function gradingKb(guess = null, prefix = 'pgr', medium = 'uz') {
+  const mark = k => {
+    const n = gradingName(k, medium);
+    return k === guess ? `✅ ${n}` : n;
+  };
+  return new InlineKeyboard()
+    .text(mark('normal'), `a:${prefix}:normal`)
+    .text(mark('bsb'), `a:${prefix}:bsb`).row()
+    .text('❌ Bekor', 'a:panel');
+}
+
+// \b faqat lotin harflari bilan ishlaydi, shuning uchun bo'sh joy bilan ajratamiz
+export function guessGrading(name) {
+  const s = ' ' + String(name || '').toLowerCase()
+    .replace(/[^a-zа-яё0-9]+/gi, ' ').trim() + ' ';
+  return / (bsb|chsb|бсб|чсб|сор|соч) /.test(s) ? 'bsb' : null;
+}
+
 export function yearsKb(current) {
   const base = Number(current.slice(0, 4));
   const kb = new InlineKeyboard();
@@ -321,6 +355,7 @@ export async function showPlans(ctx, offset = 0, edit = false, filter = {}) {
   const lang = filter.medium === 'ru' ? 'ru' : 'uz';
   const body = rows.map((r, i) =>
     `${i + 1}. ${esc(nameOf(r.subject_key, lang))}` +
+    gradingTag(r.grading, filter.medium) +
     (r.topics ? ` · ${r.topics} mavzu` : '')
   ).join('\n') || '—';
 
@@ -356,6 +391,7 @@ export async function showPlan(ctx, id, backOffset = 0) {
   await ctx.reply(
     `📗 <b>${p.grade}-sinf · ${esc(nameOf(p.subject_key, lang))}</b>\n` +
     `${p.quarter}-chorak · ${esc(p.year || '—')} · ${MEDIUM_FLAG[p.medium] || ''}\n` +
+    `${gradingName(p.grading, p.medium)}\n` +
     (p.topics ? `${p.topics} ta mavzu\n` : '') +
     `Fayl: ${esc(p.file_name || '—')}\n` +
     `Qo'shilgan: ${new Date(p.created_at).toISOString().slice(0, 10)}`,

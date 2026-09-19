@@ -1160,13 +1160,26 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     });
   }
 
-  if (cmd === 'bs') {   // fan -> saqlash
+  if (cmd === 'bs') {   // fan -> baholash turi
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'bulk' || !f.cur) return;
+    f.cur.subject = parts.slice(1).join(':');
+
+    return ctx.reply(
+      `📄 ${f.done + 1}/${f.total} · ${esc(f.cur.name)}\n` +
+      `${f.cur.grade}-sinf · ${admin.nameOf(f.cur.subject, f.medium)}\n\nBaholash turi:`,
+      { parse_mode: 'HTML',
+        reply_markup: admin.gradingKb(admin.guessGrading(f.cur.name), 'bgr', f.medium) }
+    );
+  }
+
+  if (cmd === 'bgr') {  // baholash -> saqlash
     const f = flow.get(ADMIN_ID);
     if (f?.kind !== 'bulk' || !f.cur) return;
 
     await db.savePlan({
-      grade: f.cur.grade, subjectKey: parts.slice(1).join(':'),
-      quarter: f.quarter, year: f.year, medium: f.medium,
+      grade: f.cur.grade, subjectKey: f.cur.subject,
+      quarter: f.quarter, year: f.year, medium: f.medium, grading: parts[1],
       fileId: f.cur.fileId, fileName: f.cur.name, topics: f.cur.topics,
     });
     f.saved++;
@@ -1277,15 +1290,27 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
       { reply_markup: admin.quartersKb() });
   }
 
-  if (cmd === 'pq') {   // chorak tanlandi -> o'quv yili
+  if (cmd === 'pq') {   // chorak tanlandi -> baholash turi
     const f = flow.get(ADMIN_ID);
     if (f?.kind !== 'plan') return;
     f.quarter = Number(parts[1]);
-    f.year = admin.currentYear();
 
     return ctx.reply(
       `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)} · ${f.quarter}-chorak\n\n` +
-      `O'quv yili:`,
+      `Baholash turi:`,
+      { reply_markup: admin.gradingKb(admin.guessGrading(f.fileName), 'pgr', f.medium) }
+    );
+  }
+
+  if (cmd === 'pgr') {  // baholash tanlandi -> o'quv yili
+    const f = flow.get(ADMIN_ID);
+    if (f?.kind !== 'plan') return;
+    f.grading = parts[1];
+    f.year = admin.currentYear();
+
+    return ctx.reply(
+      `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)} · ${f.quarter}-chorak · ` +
+      `${admin.gradingName(f.grading, f.medium)}\n\nO'quv yili:`,
       { reply_markup: admin.yearsKb(f.year) }
     );
   }
@@ -1298,7 +1323,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
 
     const res = await db.savePlan({
       grade: f.grade, subjectKey: f.subject, quarter: f.quarter,
-      year: f.year, medium: f.medium,
+      year: f.year, medium: f.medium, grading: f.grading || 'normal',
       fileId: f.fileId, fileName: f.fileName, topics: f.topics,
     });
     flow.delete(ADMIN_ID);
@@ -1306,7 +1331,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return ctx.reply(
       `${res.is_new ? '✅ Saqlandi' : '♻️ Yangilandi'}\n\n` +
       `${f.grade}-sinf · ${admin.nameOf(f.subject, f.medium)} · ${f.quarter}-chorak · ` +
-      `${f.year} · ${admin.MEDIUM_FLAG[f.medium]}` +
+      `${f.year} · ${admin.MEDIUM_FLAG[f.medium]}\n${admin.gradingName(f.grading, f.medium)}` +
       (f.topics ? `\n${f.topics} ta mavzu` : ''),
       { parse_mode: 'HTML',
         reply_markup: new InlineKeyboard()

@@ -80,12 +80,15 @@ create table if not exists plans (
 
 alter table plans add column if not exists year text;
 alter table plans add column if not exists medium text;
+alter table plans add column if not exists grading text;
 update plans set year = '2026/2027' where year is null;
 update plans set medium = 'uz' where medium is null;
+update plans set grading = 'normal' where grading is null;
 alter table plans drop constraint if exists plans_grade_subject_key_quarter_key;
 drop index if exists plans_uniq;
-create unique index if not exists plans_uniq2
-  on plans (grade, subject_key, quarter, year, medium);
+drop index if exists plans_uniq2;
+create unique index if not exists plans_uniq3
+  on plans (grade, subject_key, quarter, year, medium, grading);
 
 create table if not exists subject_extra (
   key        text primary key,
@@ -384,16 +387,28 @@ export async function ledgerRecent(tgId, n = 10) {
 }
 
 // ---------- ish rejalar ----------
-export async function savePlan({ grade, subjectKey, quarter, year, medium, fileId, fileName, topics }) {
+export async function savePlan({ grade, subjectKey, quarter, year, medium, grading,
+                                 fileId, fileName, topics }) {
   const { rows } = await pool.query(
-    `insert into plans (grade, subject_key, quarter, year, medium, file_id, file_name, topics)
-     values ($1,$2,$3,$4,$5,$6,$7,$8)
-     on conflict (grade, subject_key, quarter, year, medium) do update
+    `insert into plans (grade, subject_key, quarter, year, medium, grading,
+                        file_id, file_name, topics)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     on conflict (grade, subject_key, quarter, year, medium, grading) do update
         set file_id = excluded.file_id, file_name = excluded.file_name,
             topics = excluded.topics, created_at = now()
      returning *, (xmax = 0) as is_new`,
-    [grade, subjectKey, quarter, year, medium, fileId, fileName, topics]);
+    [grade, subjectKey, quarter, year, medium, grading || 'normal',
+     fileId, fileName, topics]);
   return rows[0];
+}
+
+// Fan uchun qaysi baholash turlari mavjud
+export async function gradingVariants(grade, subjectKey, quarter, year, medium) {
+  const { rows } = await pool.query(
+    `select distinct grading from plans
+      where grade=$1 and subject_key=$2 and quarter=$3 and year=$4 and medium=$5`,
+    [grade, subjectKey, quarter, year, medium]);
+  return rows.map(r => r.grading || 'normal');
 }
 
 // Bazada mavjud o'quv yillari
@@ -411,12 +426,13 @@ export async function listPlans(offset = 0, limit = 15, filter = {}) {
   if (filter.medium)  { args.push(filter.medium);  cond.push(`medium = $${args.length}`); }
   if (filter.quarter) { args.push(filter.quarter); cond.push(`quarter = $${args.length}`); }
   if (filter.year)    { args.push(filter.year);    cond.push(`year = $${args.length}`); }
-  if (filter.grade) { args.push(filter.grade); cond.push(`grade = $${args.length}`); }
+  if (filter.grade)   { args.push(filter.grade);   cond.push(`grade = $${args.length}`); }
+  if (filter.grading) { args.push(filter.grading); cond.push(`grading = $${args.length}`); }
 
   const where = cond.length ? `where ${cond.join(' and ')}` : '';
 
   const { rows } = await pool.query(
-    `select * from plans ${where} order by grade, subject_key limit $${args.length + 1} offset $${args.length + 2}`,
+    `select * from plans ${where} order by grade, subject_key, grading limit $${args.length + 1} offset $${args.length + 2}`,
     [...args, limit, offset]);
 
   const { rows: c } = await pool.query(`select count(*) from plans ${where}`, args);
