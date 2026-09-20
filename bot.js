@@ -1239,6 +1239,12 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return;
   }
 
+  if (cmd === 'brep') {
+    const f = flow.get(ADMIN_ID);
+    if (!f?.report) return ctx.reply('Hisobot topilmadi.');
+    return admin.bulkReportFile(ctx, f);
+  }
+
   if (cmd === 'bfix') {  // muammolilarni qo'lda to'g'rilash
     const f = flow.get(ADMIN_ID);
     if (!f?.problems?.length) return ctx.reply('To\'g\'rilanadigan fayl yo\'q.');

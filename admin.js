@@ -581,25 +581,61 @@ export async function autoBulk(ctx, f, { parseFileName, keyOf }) {
   f.problems = [...noGrade, ...noSubject];
   f.saved = okList.length;
   f.skipped = dup.length;
+  f.report = { okList, noGrade, noSubject, dup };
 
-  const block = (title, list, fn) =>
+  const line = x =>
+    `• ${x.grade}-sinf · ${esc(nameOf(x.subject, f.medium))}` +
+    gradingTag(x.grading, f.medium) +
+    (x.topics ? ` · ${x.topics} mavzu` : '');
+
+  const block = (title, list, fn, limit = 30) =>
     list.length ? `\n\n<b>${title} (${list.length}):</b>\n` +
-      list.slice(0, 10).map(fn).join('\n') +
-      (list.length > 10 ? `\n… yana ${list.length - 10} ta` : '') : '';
+      list.slice(0, limit).map(fn).join('\n') +
+      (list.length > limit ? `\n… yana ${list.length - limit} ta` : '') : '';
+
+  const head = `${MEDIUM_FLAG[f.medium]} ${f.quarter}-chorak · ${f.year}`;
 
   const text =
-    `✅ <b>Tugadi</b> · ${total} ta fayl\n\n` +
-    `Saqlandi: ${okList.length} ta` +
-    (dup.length || f.problems.length ? `\n⚠️ Muammo: ${dup.length + f.problems.length} ta` : '') +
+    `✅ <b>Tugadi</b> · ${total} ta fayl\n${head}` +
+    block('Saqlandi', okList, line) +
+    block('Takroriy — o\'tkazildi', dup, line) +
     block('Sinf aniqlanmadi', noGrade, x => `• ${esc(x.name)}`) +
-    block('Fan aniqlanmadi', noSubject, x => `• ${esc(x.name)}`) +
-    block('Takroriy — o\'tkazildi', dup,
-      x => `• ${x.grade}-sinf ${esc(nameOf(x.subject, f.medium))}` +
-           gradingTag(x.grading, f.medium));
+    block('Fan aniqlanmadi', noSubject, x => `• ${esc(x.name)}`);
 
   const kb = new InlineKeyboard();
   if (f.problems.length) kb.text(`🔧 To'g'rilash (${f.problems.length})`, 'a:bfix').row();
+  if (total > 30) kb.text("📄 To'liq hisobot", 'a:brep').row();
   kb.text('🗂 Baza', 'a:pfilt').text('📦 Yana yuklash', 'a:bulk');
 
   await ctx.reply(text.slice(0, 3900), { parse_mode: 'HTML', reply_markup: kb });
+}
+
+
+// To'liq hisobot — matn fayl
+export async function bulkReportFile(ctx, f) {
+  const r = f.report;
+  if (!r) return ctx.reply('Hisobot topilmadi.');
+
+  const line = x =>
+    `${x.grade}-sinf\t${nameOf(x.subject, f.medium)}\t` +
+    `${x.grading === 'bsb' ? 'BSB/CHSB' : 'Oddiy'}\t${x.topics ?? ''}\t${x.name}`;
+
+  const parts = [
+    `${MEDIUM_FLAG[f.medium]} ${f.quarter}-chorak · ${f.year}`,
+    '',
+    `SAQLANDI (${r.okList.length})`,
+    'Sinf\tFan\tBaholash\tMavzu\tFayl',
+    ...r.okList.map(line),
+  ];
+
+  if (r.dup.length) parts.push('', `TAKRORIY (${r.dup.length})`, ...r.dup.map(line));
+  if (r.noGrade.length) parts.push('', `SINF ANIQLANMADI (${r.noGrade.length})`,
+    ...r.noGrade.map(x => x.name));
+  if (r.noSubject.length) parts.push('', `FAN ANIQLANMADI (${r.noSubject.length})`,
+    ...r.noSubject.map(x => x.name));
+
+  await ctx.replyWithDocument(
+    new InputFile(Buffer.from(parts.join('\n'), 'utf8'), 'hisobot.txt'),
+    { caption: `Saqlandi: ${r.okList.length} · Muammo: ${r.dup.length + f.problems.length}` }
+  );
 }
