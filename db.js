@@ -426,6 +426,15 @@ export async function planYears() {
 }
 
 // Filtr: { medium, stage: 'low'|'high', quarter, year }
+export async function planExists({ grade, subjectKey, quarter, year, medium, grading }) {
+  const { rows } = await pool.query(
+    `select 1 from plans
+      where grade=$1 and subject_key=$2 and quarter=$3
+        and year=$4 and medium=$5 and grading=$6 limit 1`,
+    [grade, subjectKey, quarter, year, medium, grading || 'normal']);
+  return !!rows[0];
+}
+
 export async function listPlans(offset = 0, limit = 15, filter = {}) {
   const cond = [];
   const args = [];

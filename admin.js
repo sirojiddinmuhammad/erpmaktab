@@ -284,7 +284,8 @@ export function gradingKb(guess = null, prefix = 'pgr', medium = 'uz') {
 export function guessGrading(name) {
   const s = ' ' + String(name || '').toLowerCase()
     .replace(/[^a-zа-яё0-9]+/gi, ' ').trim() + ' ';
-  return / (bsb|chsb|бсб|чсб|сор|соч) /.test(s) ? 'bsb' : null;
+  // CHSBlik, СОРлар kabi qo'shimchalar ham hisobga olinadi
+  return / (bsb|chsb|бсб|чсб|сор|соч)[a-zа-яё]{0,4} /.test(s) ? 'bsb' : null;
 }
 
 export function yearsKb(current) {
@@ -523,4 +524,82 @@ export function plansMenuKb() {
     .text('➕ Reja qo\'shish', 'a:plan').text('📦 Ommaviy yuklash', 'a:bulk').row()
     .text('🗂 Rejalar bazasi', 'a:pfilt').text('📖 Fanlar ro\'yxati', 'a:subs:0').row()
     .text('🛠 Panel', 'a:panel');
+}
+
+
+// ---------- ommaviy: avtomat yuklash ----------
+// Har bir fayl uchun: sinf va fan fayl nomidan, baholash ham.
+// Aniqlanmagani va takroriysi hisobotga tushadi.
+export async function autoBulk(ctx, f, { parseFileName, keyOf }) {
+  const status = await ctx.reply(`⏳ 0/${f.queue.length}`);
+  const okList = [];
+  const noGrade = [];
+  const noSubject = [];
+  const dup = [];
+
+  const total = f.queue.length;
+  let i = 0;
+
+  while (f.queue.length) {
+    const item = f.queue.shift();
+    i++;
+
+    const h = parseFileName(item.name);
+    const grade = h.grade || null;
+    const subject = keyOf(item.name);
+    const grading = guessGrading(item.name) || 'normal';
+
+    if (!grade)        { noGrade.push(item); continue; }
+    if (!subject)      { noSubject.push(item); continue; }
+
+    // Takroriy — o'tkazib yuboramiz
+    const exists = await db.planExists({
+      grade, subjectKey: subject, quarter: f.quarter,
+      year: f.year, medium: f.medium, grading,
+    });
+    if (exists) {
+      dup.push({ ...item, grade, subject, grading });
+      continue;
+    }
+
+    await db.savePlan({
+      grade, subjectKey: subject, quarter: f.quarter,
+      year: f.year, medium: f.medium, grading,
+      fileId: item.fileId, fileName: item.name, topics: item.topics,
+    });
+    okList.push({ ...item, grade, subject, grading });
+
+    if (i % 10 === 0) {
+      await ctx.api.editMessageText(ctx.chat.id, status.message_id, `⏳ ${i}/${total}`)
+        .catch(() => {});
+    }
+  }
+
+  await ctx.api.deleteMessage(ctx.chat.id, status.message_id).catch(() => {});
+
+  // Muammolilarni keyingi bosqich uchun saqlaymiz
+  f.problems = [...noGrade, ...noSubject];
+  f.saved = okList.length;
+  f.skipped = dup.length;
+
+  const block = (title, list, fn) =>
+    list.length ? `\n\n<b>${title} (${list.length}):</b>\n` +
+      list.slice(0, 10).map(fn).join('\n') +
+      (list.length > 10 ? `\n… yana ${list.length - 10} ta` : '') : '';
+
+  const text =
+    `✅ <b>Tugadi</b> · ${total} ta fayl\n\n` +
+    `Saqlandi: ${okList.length} ta` +
+    (dup.length || f.problems.length ? `\n⚠️ Muammo: ${dup.length + f.problems.length} ta` : '') +
+    block('Sinf aniqlanmadi', noGrade, x => `• ${esc(x.name)}`) +
+    block('Fan aniqlanmadi', noSubject, x => `• ${esc(x.name)}`) +
+    block('Takroriy — o\'tkazildi', dup,
+      x => `• ${x.grade}-sinf ${esc(nameOf(x.subject, f.medium))}` +
+           gradingTag(x.grading, f.medium));
+
+  const kb = new InlineKeyboard();
+  if (f.problems.length) kb.text(`🔧 To'g'rilash (${f.problems.length})`, 'a:bfix').row();
+  kb.text('🗂 Baza', 'a:pfilt').text('📦 Yana yuklash', 'a:bulk');
+
+  await ctx.reply(text.slice(0, 3900), { parse_mode: 'HTML', reply_markup: kb });
 }

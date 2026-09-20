@@ -655,7 +655,7 @@ bot.on('message:document', async ctx => {
     if (af.queue.length % 5 === 0 || af.queue.length === 1) {
       await ctx.reply(`📥 ${af.queue.length} ta fayl navbatda`, {
         reply_markup: new InlineKeyboard()
-          .text('▶️ Boshlash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop'),
+          .text('▶️ Avtomat yuklash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop'),
       });
     }
     return;
@@ -1221,16 +1221,31 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     f.stage = 'files';
     return ctx.reply(
       `${admin.MEDIUM_FLAG[f.medium]} · ${f.quarter}-chorak · ${f.year}\n\n` +
-      `Endi fayllarni tashlayvering. Tugagach "▶️ Boshlash" ni bosing.`,
+      `Endi fayllarni tashlayvering. Tugagach "▶️ Avtomat yuklash" ni bosing.`,
       { reply_markup: new InlineKeyboard()
-          .text('▶️ Boshlash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop') }
+          .text('▶️ Avtomat yuklash', 'a:bgo').text('❌ To\'xtatish', 'a:bstop') }
     );
   }
 
-  if (cmd === 'bgo') {
+  if (cmd === 'bgo') {   // avtomat yuklash
     const f = flow.get(ADMIN_ID);
     if (f?.kind !== 'bulk') return;
     if (!f.queue.length) return ctx.reply('Hali fayl yuborilmadi.');
+
+    await admin.autoBulk(ctx, f, {
+      parseFileName,
+      keyOf: name => guessSubject(name, f.medium),
+    });
+    return;
+  }
+
+  if (cmd === 'bfix') {  // muammolilarni qo'lda to'g'rilash
+    const f = flow.get(ADMIN_ID);
+    if (!f?.problems?.length) return ctx.reply('To\'g\'rilanadigan fayl yo\'q.');
+    f.queue = f.problems;
+    f.problems = [];
+    f.total = f.queue.length;
+    f.done = 0;
     return askBulkFile(ctx);
   }
 
@@ -1453,10 +1468,13 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
 // Fayl nomidan fanni taxmin qilamiz
 function guessSubject(fileName, medium) {
   const base = String(fileName || '')
-    .replace(/\.[^.]+$/, '')
-    .replace(/@[\w.-]+/g, ' ')
+    .replace(/\.[^.]+$/, '')            // kengaytma
+    .replace(/@[\w.-]+/g, ' ')          // @kanal
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, ' ')
     .replace(/[_]+/g, ' ');
-  return subjectKey(base);
+
+  // Avval bazadagi fanlar va tanish so'zlar, keyin kodagi lug'at
+  return admin.keyOfName(base) || subjectKey(base);
 }
 
 // Ommaviy yuklash: navbatdagi faylni so'raymiz
