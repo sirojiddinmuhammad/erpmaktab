@@ -14,6 +14,7 @@ import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import * as admin from './admin.js';
 import { subjectKey } from './subjects.js';
+import { createLifecycle } from './lifecycle.js';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -1544,4 +1545,9 @@ await db.ensureSchema();
 const subjCount = await admin.loadExtraSubjects().catch(() => 0);
 console.log(`Fanlar bazada: ${subjCount} ta`);
 console.log('DB tayyor. Bot ishga tushyapti...');
-bot.start();
+
+// Deploy paytida 409 da yiqilmaydi, SIGTERM da tinch to'xtaydi (lifecycle.js)
+const life = createLifecycle(bot);
+process.once('SIGTERM', () => life.shutdown('SIGTERM'));
+process.once('SIGINT', () => life.shutdown('SIGINT'));
+life.run();
