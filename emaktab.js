@@ -481,6 +481,20 @@ export class EmaktabSession {
     await this.settle(250);
   }
 
+  // Fayl qayta yuklangandan keyin (masalan, birlashtirishdan so'ng)
+  // avval tanlangan parametrlarni nomi bo'yicha qayta tanlaydi.
+  // list: [{ find, optionLabel }] — find sahifadagi maydon yozuvlari (ikki tilda).
+  async applyParams(list) {
+    for (const { find, optionLabel } of list) {
+      const opts = await this.options(find);
+      const hit = opts.find(o => o.label === optionLabel)
+               || opts.find(o => o.label.includes(optionLabel));
+      const name = Array.isArray(find) ? find[0] : find;
+      if (!hit) throw new Error(`"${optionLabel}" varianti qayta topilmadi (${name}).`);
+      await this.pick(find, hit.index);
+    }
+  }
+
   // ---- ustun mosligi: avtomatik ----
   async mapColumns() {
     const lessonRe = reAny(W.lessonNo);
