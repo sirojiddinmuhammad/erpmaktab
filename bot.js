@@ -193,17 +193,18 @@ bot.callbackQuery('refclass', async ctx => {
 
   const wait = await ctx.reply(t(lang, 'checking'));
   const es = new EmaktabSession();
+  let es2 = null;
+  let keep = false;   // tasdiq kutilayotgan bo'lsa es2 ni yopmaymiz
   try {
     const saved = await db.getState(id);
     let ok = saved ? await es.restore(saved) : false;
     if (!ok) {
       await es.close();
-      const es2 = new EmaktabSession();
+      es2 = new EmaktabSession();
       await es2.launch();
       const { state } = await es2.login(creds.username, creds.password);
       await db.saveState(id, state);
       const cls2 = await es2.fetchClasses();
-      await es2.close();
       await db.setClasses(id, cls2);
     } else {
       const cls = await es.fetchClasses();
@@ -212,10 +213,16 @@ bot.callbackQuery('refclass', async ctx => {
     await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
     await showProfile(ctx, id, lang);
   } catch (e) {
+    if (e.message === 'TWO_FA' && es2) {
+      keep = true;
+      await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+      return askTwoFactor(ctx, id, lang, es2, e.link, { kind: 'session' });
+    }
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       e.message === 'MAINTENANCE' ? t(lang, 'maintenance') : t(lang, 'error', { msg: e.message }));
   } finally {
     await es.close();
+    if (es2 && !keep) await es2.close();
   }
 });
 
@@ -436,39 +443,118 @@ async function doLogin(ctx, id, lang, username, password) {
 
   const wait = await ctx.reply(t(lang, 'checking'));
   const es = new EmaktabSession();
+  let keep = false;   // tasdiq kutilayotgan bo'lsa brauzerni yopmaymiz
   try {
     await es.launch();
     const { state, fullName } = await es.login(username, password);
-    const link = await db.linkAccount(id, username, password, fullName);
-    await db.saveState(id, state);
-
-    // Sinf va fanlarni o'qib qo'yamiz
-    const classes = await es.fetchClasses();
-    if (classes.length) await db.setClasses(id, classes);
-
-    // Oldingi Telegram uzildi — unga xabar beramiz
-    for (const old of link.prevTgIds) {
-      const oldLang = await L(old);
-      await bot.api.sendMessage(old, t(oldLang, 'unlinked')).catch(() => {});
-    }
-    await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
-      fullName ? t(lang, 'connected', { name: fullName }) : t(lang, 'connected_no'));
-
-    await notifyAdmin(
-      `${link.isNew ? '✅ <b>Yangi eMaktab hisobi</b>' : '🔄 <b>Hisob qayta ulandi</b>'}\n` +
-      `${esc(fullName || '—')}\n${who(ctx.from)}\n` +
-      `Login: <code>${esc(username)}</code>` +
-      (link.prevTgIds.length ? `\n⚠️ Oldingi Telegram uzildi: ${link.prevTgIds.join(', ')}` : '')
-    );
+    await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+    await finishLink(ctx, id, lang, es, username, password, state, fullName);
   } catch (e) {
+    if (e.message === 'TWO_FA') {
+      keep = true;
+      await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+      return askTwoFactor(ctx, id, lang, es, e.link, { kind: 'link', username, password });
+    }
     await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
       e.message === 'MAINTENANCE' ? t(lang, 'maintenance')
       : e.message.startsWith('BAD_CREDENTIALS') ? t(lang, 'bad_creds')
       : t(lang, 'error', { msg: e.message }));
   } finally {
-    await es.close();
+    if (!keep) await es.close();
   }
 }
+
+// Hisobni bazaga ulash (login muvaffaqiyatli bo'lgandan keyin)
+async function finishLink(ctx, id, lang, es, username, password, state, fullName) {
+  const link = await db.linkAccount(id, username, password, fullName);
+  await db.saveState(id, state);
+
+  // Sinf va fanlarni o'qib qo'yamiz
+  const classes = await es.fetchClasses();
+  if (classes.length) await db.setClasses(id, classes);
+
+  // Oldingi Telegram uzildi — unga xabar beramiz
+  for (const old of link.prevTgIds) {
+    const oldLang = await L(old);
+    await bot.api.sendMessage(old, t(oldLang, 'unlinked')).catch(() => {});
+  }
+  await ctx.reply(fullName ? t(lang, 'connected', { name: fullName }) : t(lang, 'connected_no'));
+
+  await notifyAdmin(
+    `${link.isNew ? '✅ <b>Yangi eMaktab hisobi</b>' : '🔄 <b>Hisob qayta ulandi</b>'}\n` +
+    `${esc(fullName || '—')}\n${who(ctx.from)}\n` +
+    `Login: <code>${esc(username)}</code>` +
+    (link.prevTgIds.length ? `\n⚠️ Oldingi Telegram uzildi: ${link.prevTgIds.join(', ')}` : '')
+  );
+}
+
+// ---------- eMaktab "yangi qurilma" tasdig'i ----------
+// Bot uzoq kutmaydi (grammY xabarlarni ketma-ket ishlaydi — kutish hammani
+// to'xtatib qo'yardi). Brauzer sahifasi ochiq qoladi, o'qituvchi eMaktab botida
+// tasdiqlab «Tasdiqladim» ni bosganda davom etamiz.
+const TWO_FA_TTL = 5 * 60 * 1000;
+const pending2fa = new Map();   // tgId -> { es, kind, username, password, at }
+
+async function dropTwoFactor(id) {
+  const p = pending2fa.get(id);
+  if (!p) return;
+  pending2fa.delete(id);
+  await p.es.close().catch(() => {});
+}
+
+setInterval(() => {
+  for (const [id, p] of pending2fa)
+    if (Date.now() - p.at > TWO_FA_TTL + 30_000) dropTwoFactor(id);
+}, 60_000);
+
+async function askTwoFactor(ctx, id, lang, es, link, meta) {
+  await dropTwoFactor(id);
+  pending2fa.set(id, { es, at: Date.now(), ...meta });
+
+  const kb = new InlineKeyboard();
+  if (link) kb.url(t(lang, 'twofa_btn_open'), link).row();
+  kb.text(t(lang, 'twofa_btn_done'), 'tfa');
+  await ctx.reply(t(lang, link ? 'twofa_ask' : 'twofa_ask_nolink'), { reply_markup: kb });
+}
+
+bot.callbackQuery('tfa', async ctx => {
+  const id = ctx.from.id;
+  const lang = await L(id);
+  const p = pending2fa.get(id);
+  if (!p || Date.now() - p.at > TWO_FA_TTL) {
+    await dropTwoFactor(id);
+    await ctx.answerCallbackQuery();
+    return ctx.reply(t(lang, 'twofa_expired'));
+  }
+
+  let res;
+  try {
+    res = await p.es.finishTwoFactor({ timeout: 8000 });
+  } catch (e) {
+    if (e.message === 'TWO_FA_PENDING')
+      return ctx.answerCallbackQuery({ text: t(lang, 'twofa_wait'), show_alert: true });
+    await dropTwoFactor(id);
+    await ctx.answerCallbackQuery();
+    return ctx.reply(e.message === 'TWO_FA_EXPIRED'
+      ? t(lang, 'twofa_expired') : t(lang, 'error', { msg: e.message }));
+  }
+
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
+  pending2fa.delete(id);
+  try {
+    if (p.kind === 'link') {
+      await finishLink(ctx, id, lang, p.es, p.username, p.password, res.state, res.fullName);
+    } else {
+      await db.saveState(id, res.state);
+      await ctx.reply(t(lang, 'twofa_ok_retry'), { reply_markup: mainKb(lang) });
+    }
+  } catch (e) {
+    await ctx.reply(t(lang, 'error', { msg: e.message }));
+  } finally {
+    await p.es.close().catch(() => {});
+  }
+});
 
 // ---------- balans: to'ldirish ----------
 bot.callbackQuery('topup', async ctx => {
@@ -746,6 +832,14 @@ bot.on('message:document', async ctx => {
     await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
     await askNext(ctx, id, lang);
   } catch (e) {
+    if (e.message === 'TWO_FA') {
+      // Brauzerni tasdiq kutishga topshiramiz, import sessiyasini yopamiz
+      const es = s.es;
+      if (s.filePath) await fs.unlink(s.filePath).catch(() => {});
+      live.delete(id);
+      await ctx.api.deleteMessage(ctx.chat.id, wait.message_id).catch(() => {});
+      return askTwoFactor(ctx, id, lang, es, e.link, { kind: 'session' });
+    }
     await endSession(id);
     await ctx.reply(
       e.message === 'MAINTENANCE' ? t(lang, 'maintenance')

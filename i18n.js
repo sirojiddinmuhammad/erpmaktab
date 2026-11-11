@@ -62,6 +62,21 @@ const S = {
     ru: '⚠️ Ваш аккаунт eMaktab подключён к другому Telegram. Здесь импорт работать не будет.',
   },
   bad_creds:    { uz: "❌ Login yoki parol noto'g'ri.", ru: '❌ Неверный логин или пароль.' },
+
+  // --- eMaktab "yangi qurilma" tasdig'i ---
+  twofa_ask: {
+    uz: "🔐 eMaktab kirishni tasdiqlashni so'rayapti (yangi qurilma).\n\n1. Pastdagi tugma orqali eMaktab botini oching va kirishni tasdiqlang.\n2. So'ng «✅ Tasdiqladim» ni bosing.\n\n5 daqiqa vaqtingiz bor.",
+    ru: '🔐 eMaktab просит подтвердить вход (новое устройство).\n\n1. Откройте бот eMaktab кнопкой ниже и подтвердите вход.\n2. Затем нажмите «✅ Подтвердил».\n\nУ вас есть 5 минут.',
+  },
+  twofa_ask_nolink: {
+    uz: "🔐 eMaktab kirishni tasdiqlashni so'rayapti (yangi qurilma).\n\n1. Telegram'da eMaktab botini oching va kirishni tasdiqlang.\n2. So'ng «✅ Tasdiqladim» ni bosing.\n\n5 daqiqa vaqtingiz bor.",
+    ru: '🔐 eMaktab просит подтвердить вход (новое устройство).\n\n1. Откройте бот eMaktab в Telegram и подтвердите вход.\n2. Затем нажмите «✅ Подтвердил».\n\nУ вас есть 5 минут.',
+  },
+  twofa_btn_open: { uz: "📲 eMaktab'da tasdiqlash", ru: '📲 Подтвердить в eMaktab' },
+  twofa_btn_done: { uz: '✅ Tasdiqladim', ru: '✅ Подтвердил' },
+  twofa_wait:     { uz: "Hali tasdiqlanmadi. eMaktab botida tasdiqlab, qayta bosing.", ru: 'Ещё не подтверждено. Подтвердите в боте eMaktab и нажмите снова.' },
+  twofa_expired:  { uz: "⌛ Tasdiqlash vaqti tugadi. Amalni qaytadan bajaring.", ru: '⌛ Время подтверждения истекло. Повторите действие.' },
+  twofa_ok_retry: { uz: "✅ eMaktab'ga ulandi. Endi amalni qaytadan bajaring (faylni qayta yuboring).", ru: '✅ Подключено к eMaktab. Теперь повторите действие (отправьте файл снова).' },
   need_login:   { uz: 'Avval "👤 Profil" dan eMaktab hisobingizni ulang.', ru: 'Сначала подключите аккаунт eMaktab в "👤 Профиль".' },
 
   // --- profil ---

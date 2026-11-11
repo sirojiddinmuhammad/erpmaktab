@@ -2,6 +2,8 @@ import { chromium } from 'playwright';
 
 const BASE = 'https://schools.emaktab.uz';
 const IMPORT_URL = `${BASE}/v2/journals/planning/import`;
+// "Yangi qurilma" tasdiq sahifasi: login.emaktab.uz/login/2fa-verification?key=...
+export const TWO_FA_RE = /login\.emaktab\.uz\/login\/2fa-verification/i;
 
 // Fayldagi ustun nomi uchun shablonlar -> eMaktabdagi maydon.
 // Rus, o'zbek lotin va kirill variantlari qamrab olingan.
@@ -238,9 +240,18 @@ export class EmaktabSession {
     await passInput.fill(password);
 
     await page.locator('button[type="submit"], input[type="submit"]').first().click();
-    await page.waitForURL(u => !/login\.emaktab\.uz/.test(u.href), { timeout: 20000 })
-      .catch(() => {});
+    // Login sahifasidan chiqishni yoki "yangi qurilma" tasdiq sahifasini kutamiz
+    await page.waitForURL(u => !/login\.emaktab\.uz/.test(u.href) || TWO_FA_RE.test(u.href),
+      { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(600);
+
+    // eMaktab yangi qurilmadan kirishni Telegram orqali tasdiqlashni so'rayapti.
+    // Sahifani ochiq qoldiramiz: o'qituvchi tasdiqlagach finishTwoFactor() davom ettiradi.
+    if (TWO_FA_RE.test(page.url())) {
+      const e = new Error('TWO_FA');
+      e.link = await this.twoFactorLink();
+      throw e;
+    }
 
     if (/login\.emaktab\.uz/.test(page.url())) {
       const err = await page.locator('.error, .alert, [class*="error"]').first()
@@ -248,6 +259,41 @@ export class EmaktabSession {
       throw new Error(err ? `BAD_CREDENTIALS: ${err.slice(0, 120)}` : 'BAD_CREDENTIALS');
     }
 
+    const fullName = await this.getUserName();
+    return { state: await this.ctx.storageState(), fullName };
+  }
+
+  // Tasdiq sahifasidagi eMaktab Telegram botiga havola.
+  // Havola sahifa holatida (window.__2FA__INITIAL__STATE__) turadi — maydon
+  // nomiga bog'lanmaslik uchun t.me / tg:// ko'rinishidagi qiymatni qidiramiz.
+  async twoFactorLink() {
+    return await this.page.evaluate(() => {
+      const isTg = v => typeof v === 'string' && /^(https?:\/\/(t\.me|telegram\.me)\/|tg:\/\/)/i.test(v);
+      const walk = (o, depth = 0) => {
+        if (!o || typeof o !== 'object' || depth > 4) return null;
+        for (const v of Object.values(o)) {
+          if (isTg(v)) return v;
+          const hit = walk(v, depth + 1);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      const fromState = walk(window.__2FA__INITIAL__STATE__);
+      if (fromState) return fromState;
+      const a = [...document.querySelectorAll('a[href]')].find(x => isTg(x.href));
+      return a ? a.href : null;
+    }).catch(() => null);
+  }
+
+  // O'qituvchi Telegram'da tasdiqlagandan keyin chaqiriladi.
+  // Sahifa o'zi tasdiqni kutib, keyingi sahifaga o'tadi — biz shuni kutamiz.
+  async finishTwoFactor({ timeout = 15000 } = {}) {
+    const page = this.page;
+    await page.waitForURL(u => !/login\.emaktab\.uz/.test(u.href), { timeout }).catch(() => {});
+    if (/login\.emaktab\.uz/.test(page.url())) {
+      throw new Error(TWO_FA_RE.test(page.url()) ? 'TWO_FA_PENDING' : 'TWO_FA_EXPIRED');
+    }
+    await page.waitForTimeout(600);
     const fullName = await this.getUserName();
     return { state: await this.ctx.storageState(), fullName };
   }
