@@ -1,0 +1,186 @@
+// Rejalar bazasi dashboardi: /panel sahifasi va /api/* yo'llari.
+// Barcha tashqi bog'liqliklar (DB, Telegram, Excel) deps orqali keladi.
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { createAuth, parseCookies, sessionCookie } from './auth.js';
+import { validateFilter } from './validate.js';
+import { buildCoverage } from './coverage.js';
+
+const PAGE_SIZE = 50;
+const SESSION_SEC = 7 * 24 * 3600;
+const EXPIRED_HTML =
+  '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
+  '<title>Dashboard</title><body style="font:16px system-ui;padding:24px">' +
+  '<p>Havola eskirgan. Botga /panel yozing.</p></body>';
+
+export class HttpError extends Error {
+  constructor(status, error) { super(error); this.status = status; this.error = error; }
+}
+
+export function json(res, status, body, headers = {}) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
+  res.end(JSON.stringify(body));
+}
+
+const html = (res, status, text) => {
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(text);
+};
+
+export function createDashboard(deps) {
+  const auth = deps.auth || createAuth();
+  const log = deps.log || ((...a) => console.error(...a));
+  const db = deps.db;
+  const subjectKeys = () => new Set(deps.subjects().map(s => s.key));
+  const routes = [];   // [method, RegExp, handler]
+  const on = (method, re, fn) => routes.push([method, re, fn]);
+
+  const filterOr400 = query => {
+    const f = validateFilter(query, subjectKeys());
+    if (!f.ok) throw new HttpError(400, f.error);
+    return f.value;
+  };
+  // year, quarter, medium majburiy; grading standart 'normal'
+  const sliceOr400 = query => {
+    const f = filterOr400(query);
+    if (!f.year || !f.quarter || !f.medium) throw new HttpError(400, 'Yil, chorak va til kerak');
+    return { year: f.year, quarter: f.quarter, medium: f.medium, grading: f.grading || 'normal' };
+  };
+  const planOr404 = async id => {
+    const p = await db.planForPanel(Number(id));
+    if (!p) throw new HttpError(404, 'Reja topilmadi');
+    return p;
+  };
+  const coverage = async s =>
+    buildCoverage(await db.coverageRows({ medium: s.medium, grading: s.grading }), s);
+
+  // ---------- o'qish ----------
+  on('GET', /^\/api\/meta$/, async (req, res) => json(res, 200, {
+    subjects: deps.subjects().map(({ key, uz, ru }) => ({ key, uz, ru })),
+    years: await db.planYears(),
+    currentYear: deps.currentYear(),
+  }));
+
+  on('GET', /^\/api\/plans$/, async (req, res, u) => {
+    const { page, ...filter } = filterOr400(u.searchParams);
+    const { rows, total } = await db.listPlans((page - 1) * PAGE_SIZE, PAGE_SIZE, filter);
+    json(res, 200, { rows, total, page, pageSize: PAGE_SIZE });
+  });
+
+  on('GET', /^\/api\/stats$/, async (req, res, u) => {
+    const s = sliceOr400(u.searchParams);
+    const c = await db.panelCounts(s);
+    const cov = await coverage(s);
+    json(res, 200, { total: c.total, inQuarter: c.inQuarter, missing: cov.missing, archived: c.archived });
+  });
+
+  on('GET', /^\/api\/coverage$/, async (req, res, u) => {
+    const s = sliceOr400(u.searchParams);
+    const cov = await coverage(s);
+    const byKey = new Map(deps.subjects().map(x => [x.key, x]));
+    const names = {};
+    for (const k of cov.subjects) {
+      const x = byKey.get(k);
+      names[k] = { uz: x?.uz || k, ru: x?.ru || x?.uz || k };
+    }
+    json(res, 200, { ...cov, names });
+  });
+
+  on('GET', /^\/api\/plans\/exists$/, async (req, res, u) => {
+    const f = filterOr400(u.searchParams);
+    if (!f.grade || !f.subjectKey || !f.quarter || !f.year || !f.medium)
+      throw new HttpError(400, "Sinf, fan, chorak, yil va til kerak");
+    const hit = await db.findPlanByKey({ ...f, grading: f.grading || 'normal' });
+    json(res, 200, { exists: !!hit, id: hit ? hit.id : null, archived: hit ? hit.archived : false });
+  });
+
+  on('GET', /^\/api\/plans\/(\d+)\/topics$/, async (req, res, u, m) => {
+    const p = await planOr404(m[1]);
+    if (!/\.xlsx$/i.test(p.file_name || '')) throw new HttpError(415, 'xls');
+    const tmp = path.join(deps.tmpDir, `panel-${crypto.randomBytes(8).toString('hex')}.xlsx`);
+    await fs.mkdir(deps.tmpDir, { recursive: true });
+    try {
+      await fs.writeFile(tmp, await deps.downloadFile(p.file_id));
+      const { rows } = await deps.readRows(tmp);
+      json(res, 200, { rows: rows.map((r, i) => ({ n: i + 1, topic: r.topic, hw: r.hw })) });
+    } finally {
+      await fs.unlink(tmp).catch(() => {});
+    }
+  });
+
+  on('GET', /^\/api\/plans\/(\d+)\/file$/, async (req, res, u, m) => {
+    const p = await planOr404(m[1]);
+    const buf = await deps.downloadFile(p.file_id);
+    const name = p.file_name || `reja-${p.id}.xlsx`;
+    res.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': buf.length,
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'cache-control': 'no-store',
+    });
+    res.end(buf);
+  });
+
+  // ---------- kirish ----------
+  async function panelRoutes(req, res, u, sid) {
+    const p = u.pathname;
+    if (p === '/panel/login' && req.method === 'GET') {
+      const newSid = auth.redeem(u.searchParams.get('t') || '');
+      if (!newSid) return html(res, 401, EXPIRED_HTML);
+      res.writeHead(302, { location: '/panel', 'set-cookie': sessionCookie(newSid, SESSION_SEC), 'cache-control': 'no-store' });
+      return res.end();
+    }
+    if (p === '/panel/logout' && req.method === 'POST') {
+      if (req.headers.origin !== deps.publicOrigin) return json(res, 403, { error: 'origin' });
+      if (sid) auth.logout(sid);
+      res.writeHead(302, { location: '/panel', 'set-cookie': sessionCookie('', 0) });
+      return res.end();
+    }
+    if ((p === '/panel' || p === '/panel/') && req.method === 'GET') {
+      if (!auth.check(sid)) return html(res, 401, EXPIRED_HTML);
+      return html(res, 200, await fs.readFile(deps.htmlPath, 'utf8'));
+    }
+    return json(res, 404, { error: 'not found' });
+  }
+
+  async function handle(req, res) {
+    const u = new URL(req.url || '/', 'http://local');
+    const p = u.pathname;
+    const isPanel = p === '/panel' || p.startsWith('/panel/');
+    if (!isPanel && !p.startsWith('/api/')) return false;
+
+    try {
+      const sid = parseCookies(req.headers.cookie).sid;
+      if (isPanel) { await panelRoutes(req, res, u, sid); return true; }
+
+      if (!auth.check(sid)) { json(res, 401, { error: 'session' }); return true; }
+      if (req.method === 'POST' && req.headers.origin !== deps.publicOrigin) {
+        req.resume();
+        json(res, 403, { error: 'origin' });
+        return true;
+      }
+      for (const [method, re, fn] of routes) {
+        const m = req.method === method && p.match(re);
+        if (m) { await fn(req, res, u, m); return true; }
+      }
+      json(res, 404, { error: 'not found' });
+    } catch (e) {
+      if (e instanceof HttpError) {
+        if (!res.headersSent) json(res, e.status, { error: e.error });
+        else res.end();
+      } else {
+        log('[panel]', e);
+        if (!res.headersSent) json(res, 500, { error: 'server' });
+        else res.end();
+      }
+    }
+    return true;
+  }
+
+  return {
+    handle,
+    issueLoginLink: () => `${deps.publicOrigin}/panel/login?t=${auth.issueToken()}`,
+  };
+}
