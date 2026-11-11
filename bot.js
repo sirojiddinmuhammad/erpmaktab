@@ -1218,6 +1218,7 @@ const planFilter = {};
 const dash = createDashboard({
   db,
   subjects: admin.allSubjects,
+  reloadSubjects: () => admin.loadExtraSubjects(),
   keyOf: admin.keyOfName,
   currentYear: admin.currentYear,
   guessGrading: admin.guessGrading,

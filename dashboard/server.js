@@ -8,6 +8,7 @@ import { createAuth, parseCookies, sessionCookie } from './auth.js';
 import { validateFilter, validatePlan, findDuplicates } from './validate.js';
 import { parseFileName, guessSubject } from '../hints.js';
 import { quarterOfDate, schoolYearOfDate } from './inbox.js';
+import { makeSubjectKey, validateSubject, SUBJECT_KEY_RE } from './subjects.js';
 import { buildCoverage } from './coverage.js';
 
 const PAGE_SIZE = 50;
@@ -234,6 +235,58 @@ export function createDashboard(deps) {
     catch (e) { log('[panel] sendDocument', e?.message || e); throw new HttpError(502, 'telegram'); }
 
     json(res, 200, { fileId, fileName, topics, guess: guessFrom(fileName) });
+  });
+
+  // ---------- fanlar ----------
+  const keyOr404 = raw => {
+    let k;
+    try { k = decodeURIComponent(raw); } catch { k = ''; }
+    if (!SUBJECT_KEY_RE.test(k)) throw new HttpError(404, 'Fan topilmadi');
+    return k;
+  };
+  const subjectOr400 = body => {
+    const v = validateSubject(body);
+    if (!v.ok) throw new HttpError(400, v.error);
+    return v.value;
+  };
+  const reload = () => deps.reloadSubjects().catch(e => log('[panel] reloadSubjects', e?.message || e));
+
+  on('GET', /^\/api\/subjects$/, async (req, res) => {
+    json(res, 200, { rows: await db.subjectsForPanel() });
+  });
+
+  on('POST', /^\/api\/subjects$/, async (req, res) => {
+    const v = subjectOr400(await readJson(req));
+    const key = await makeSubjectKey(v.uz, k => db.subjectKeyExists(k));
+    if (!key) throw new HttpError(400, "Nomda harf yoki raqam bo'lishi kerak");
+    await db.insertSubject({ key, ...v });
+    await reload();
+    json(res, 200, { key });
+  });
+
+  on('POST', /^\/api\/subjects\/([^/]+)$/, async (req, res, u, m) => {
+    const key = keyOr404(m[1]);
+    const v = subjectOr400(await readJson(req));
+    if (!(await db.getSubject(key))) throw new HttpError(404, 'Fan topilmadi');
+    await db.updateSubject(key, v);
+    await reload();
+    json(res, 200, { ok: true });
+  });
+
+  on('POST', /^\/api\/subjects\/([^/]+)\/archive$/, async (req, res, u, m) => {
+    const key = keyOr404(m[1]);
+    const body = await readJson(req);
+    const ok = await db.archiveSubject(key, body?.withPlans === true);
+    await reload();
+    json(res, 200, { ok });
+  });
+
+  on('POST', /^\/api\/subjects\/([^/]+)\/restore$/, async (req, res, u, m) => {
+    const key = keyOr404(m[1]);
+    req.resume();
+    const ok = await db.restoreSubject(key);
+    await reload();
+    json(res, 200, { ok });
   });
 
   // ---------- kiruvchi (forward qilingan) fayllar ----------
