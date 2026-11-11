@@ -89,7 +89,7 @@ test('topics va file', async () => {
     assert.equal((await fetch(p.base + '/api/plans/99/topics', { headers: { cookie } })).status, 404);
     const f = await fetch(p.base + '/api/plans/7/file', { headers: { cookie } });
     assert.equal(f.status, 200);
-    assert.equal(f.headers.get('content-disposition'), "attachment; filename*=UTF-8''5%20sinf%20Matematika.xlsx");
+    assert.equal(f.headers.get('content-disposition'), `attachment; filename="5 sinf Matematika.xlsx"; filename*=UTF-8''5%20sinf%20Matematika.xlsx`);
     assert.equal(await f.text(), 'xlsx-bytes');
   } finally { await p.close(); }
 });

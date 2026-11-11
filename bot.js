@@ -1633,7 +1633,14 @@ if (process.env.PORT) {
   const file = path.join(dir, 'guide.html');
 
   http.createServer(async (req, res) => {
-    if (await dash.handle(req, res)) return;
+    try {
+      if (await dash.handle(req, res)) return;
+    } catch (e) {
+      // dashboard xatosi botni yiqitmasin
+      console.error('[panel]', e);
+      if (!res.headersSent) { res.writeHead(500); res.end(); }
+      return;
+    }
     const url = (req.url || '/').split('?')[0];
 
     if (url === '/health') {

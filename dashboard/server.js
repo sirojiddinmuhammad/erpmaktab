@@ -55,6 +55,21 @@ async function readJson(req) {
   catch { throw new HttpError(400, "So'rov noto'g'ri"); }
 }
 
+// RFC 5987/6266: filename* da ' ( ) * ham kodlanadi; eski brauzerlar uchun ASCII nom
+export function contentDisposition(name) {
+  const enc = encodeURIComponent(name).replace(/['()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${enc}`;
+}
+
+// Fayl nomidagi chorak: parseFileName + qisqa "2 четв" (faqat dashboard uchun;
+// botdagi import oqimi o'zgarmasin)
+function quarterOf(fileName, h) {
+  if (h.quarter >= 1 && h.quarter <= 4) return h.quarter;
+  const m = String(fileName).toLowerCase().match(/(?:^|\D)([1-4])\s*-?\s*четв/);
+  return m ? Number(m[1]) : null;
+}
+
 const html = (res, status, text) => {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(text);
@@ -148,7 +163,7 @@ export function createDashboard(deps) {
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
       'content-length': buf.length,
-      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'content-disposition': contentDisposition(name),
       'cache-control': 'no-store',
     });
     res.end(buf);
@@ -192,7 +207,7 @@ export function createDashboard(deps) {
         subject: subject && subjectKeys().has(subject) ? subject : null,
         grading: deps.guessGrading(fileName) === 'bsb' ? 'bsb' : null,
         year,
-        quarter: h.quarter >= 1 && h.quarter <= 4 ? h.quarter : null,
+        quarter: quarterOf(fileName, h),
       },
     });
   });
@@ -212,8 +227,13 @@ export function createDashboard(deps) {
     let created = 0, replaced = 0;
     for (const [i, v] of valid.entries()) {
       if (dups.has(i)) { skipped.push({ index: v.index, error: 'Takror' }); continue; }
-      const saved = await db.savePlan(v.value);
-      if (saved?.is_new) created++; else replaced++;
+      try {
+        const saved = await db.savePlan(v.value);
+        if (saved?.is_new) created++; else replaced++;
+      } catch (e) {
+        log('[panel] savePlan', e?.message || e);
+        skipped.push({ index: v.index, error: 'server' });
+      }
     }
     skipped.sort((a, b) => a.index - b.index);
     json(res, 200, { created, replaced, skipped });
@@ -264,7 +284,9 @@ export function createDashboard(deps) {
   }
 
   async function handle(req, res) {
-    const u = new URL(req.url || '/', 'http://local');
+    let u;
+    try { u = new URL(req.url || '/', 'http://local'); }
+    catch { return false; }   // masalan "GET //" — bizning yo'l emas
     const p = u.pathname;
     const isPanel = p === '/panel' || p.startsWith('/panel/');
     if (!isPanel && !p.startsWith('/api/')) return false;
