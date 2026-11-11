@@ -16,6 +16,7 @@ import * as admin from './admin.js';
 import { createLifecycle } from './lifecycle.js';
 import { createDashboard } from './dashboard/server.js';
 import { withRetry } from './dashboard/telegram.js';
+import { inboxDecision, createInboxNotifier } from './dashboard/inbox.js';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -781,6 +782,18 @@ bot.on('message:document', async ctx => {
   }
 
   const s = live.get(id);
+
+  // Admin kanaldan forward qilgan reja fayli → dashboard'dagi "Kiruvchi"
+  const rec = inboxDecision(ctx.message, {
+    fromId: id, adminId: ADMIN_ID,
+    awaitingFile: s?.step === 'await_file', bulkActive: af?.kind === 'bulk',
+  });
+  if (rec) {
+    try { inboxNotifier.note((await db.addInbox(rec)).added); }
+    catch (e) { console.error('[inbox]', e); }
+    return;
+  }
+
   if (!s || s.step !== 'await_file') return;
 
   const doc = ctx.message.document;
@@ -1224,6 +1237,10 @@ const dash = createDashboard({
   publicOrigin: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`,
   htmlPath: path.join(path.dirname(fileURLToPath(import.meta.url)), 'dashboard', 'index.html'),
   tmpDir: TMP,
+});
+
+const inboxNotifier = createInboxNotifier({
+  send: text => bot.api.sendMessage(ADMIN_ID, text),
 });
 
 bot.command('panel', async ctx => {
