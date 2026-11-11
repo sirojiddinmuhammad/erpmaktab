@@ -228,6 +228,24 @@ const fillSelect = (sel, opts, value) => {
 const subjectOpts = medium => [...meta.subjects]
   .map(s => ({ value: s.key, label: subjName(s.key, medium) }))
   .sort((a, b) => a.label.localeCompare(b.label));
+// Rejalar filtridagi fanlar: til tanlangan bo'lsa — shu tildagi nomlar;
+// "Hammasi" bo'lsa — o'zbekcha va ruscha alohida guruhlarda (qiymat "til|kalit").
+function renderSubjectFilter() {
+  const sel = pf('subject');
+  const medium = pf('medium').value;
+  const cur = sel.value.includes('|') ? sel.value.split('|')[1] : sel.value;
+  if (medium) {
+    fillSelect(sel, [{ value: '', label: 'Hammasi' }, ...subjectOpts(medium)]);
+    sel.value = cur;
+    if (sel.value !== cur) sel.value = '';
+    return;
+  }
+  const group = (m, title) => `<optgroup label="${title}">${
+    subjectOpts(m).map(o => `<option value="${m}|${esc(o.value)}">${esc(o.label)}</option>`).join('')}</optgroup>`;
+  sel.innerHTML = `<option value="">Hammasi</option>${group('uz', "🇺🇿 O'zbekcha")}${group('ru', '🇷🇺 Ruscha')}`;
+  sel.value = '';
+}
+
 const gradeOpts = () => Array.from({ length: 11 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}-sinf` }));
 
 // ---------- tablar ----------
@@ -313,6 +331,14 @@ async function loadPlans() {
 }
 let filterTimer;
 $('#pf').addEventListener('input', e => {
+  if (e.target.name === 'subject' && e.target.value.includes('|')) {
+    const [m, key] = e.target.value.split('|');
+    pf('medium').value = m;
+    renderSubjectFilter();
+    pf('subject').value = key;
+  } else if (e.target.name === 'medium') {
+    renderSubjectFilter();
+  }
   clearTimeout(filterTimer);
   filterTimer = setTimeout(() => { page = 1; loadPlans(); }, e.target.name === 'q' ? 350 : 0);
 });
@@ -586,7 +612,8 @@ async function init() {
   const years = yearOptions();
   fillSelect(pf('year'), [{ value: '', label: 'Hammasi' }, ...years.map(y => ({ value: y, label: y }))]);
   fillSelect(pf('grade'), [{ value: '', label: 'Hammasi' }, ...gradeOpts()]);
-  fillSelect(pf('subject'), [{ value: '', label: 'Hammasi' }, ...subjectOpts('uz')]);
+  if (params.get('medium')) pf('medium').value = params.get('medium');
+  renderSubjectFilter();
   for (const k of PF) {
     if (!params.has(k)) continue;
     const el = pf(k);
