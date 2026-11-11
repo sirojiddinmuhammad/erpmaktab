@@ -18,3 +18,9 @@ test('SCHEMA: archived_at faqat ADD COLUMN bilan', () => {
   assert.match(SCHEMA, /alter table plans add column if not exists archived_at timestamptz;/);
   assert.doesNotMatch(SCHEMA.split('archived_at')[1] ?? '', /\b(drop table|truncate|delete from)\b/i);
 });
+
+test('SCHEMA: plan_inbox va subject_extra.archived_at faqat qo\'shish bilan', () => {
+  assert.match(SCHEMA, /create table if not exists plan_inbox \(/);
+  assert.match(SCHEMA, /alter table subject_extra add column if not exists archived_at timestamptz;/);
+  assert.doesNotMatch(SCHEMA.split('plan_inbox')[1] ?? '', /\b(drop table|truncate|delete from)\b/i);
+});

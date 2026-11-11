@@ -512,7 +512,7 @@ export async function showSubject(ctx, key, backOffset = 0) {
       reply_markup: new InlineKeyboard()
         .text('✏️ Nomini o\'zgartirish', `a:sed:${key}`).row()
         .text('🏷 Tanish so\'z qo\'shish', `a:sal:${key}`).row()
-        .text('🗑 O\'chirish', `a:sdel:${key}`)
+        .text('🗄 Arxivlash', `a:sdel:${key}`)
         .text('⬅️ Orqaga', `a:subs:${backOffset}`),
     }
   );

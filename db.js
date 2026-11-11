@@ -137,6 +137,26 @@ update payments p set account_id = u.account_id from users u
 
 -- rejalar o'chirilmaydi, arxivlanadi
 alter table plans add column if not exists archived_at timestamptz;
+
+-- forward qilingan reja fayllari (dashboard'da ko'rib chiqiladi)
+create table if not exists plan_inbox (
+  id             bigserial primary key,
+  file_id        text not null,
+  file_unique_id text not null,
+  file_name      text not null,
+  file_size      int,
+  caption        text,
+  source         text,
+  posted_at      timestamptz,
+  created_at     timestamptz default now(),
+  taken_at       timestamptz,
+  dismissed_at   timestamptz
+);
+create index if not exists plan_inbox_pending
+  on plan_inbox (created_at) where taken_at is null and dismissed_at is null;
+
+-- fanlar o'chirilmaydi, arxivlanadi
+alter table subject_extra add column if not exists archived_at timestamptz;
 `;
 
 export async function ensureSchema() { await pool.query(SCHEMA); }
@@ -561,13 +581,13 @@ export async function addSubject(key, uz, ru, alias = []) {
   await pool.query(
     `insert into subject_extra (key, uz, ru, alias, sort) values ($1,$2,$3,$4,999)
      on conflict (key) do update
-        set uz=excluded.uz, ru=excluded.ru, alias=excluded.alias`,
+        set uz=excluded.uz, ru=excluded.ru, alias=excluded.alias, archived_at=null`,
     [key, uz, ru, JSON.stringify(alias)]);
 }
 
 export async function extraSubjects() {
   const { rows } = await pool.query(
-    'select key, uz, ru, alias, sort, seeded from subject_extra order by sort, uz');
+    'select key, uz, ru, alias, sort, seeded from subject_extra where archived_at is null order by sort, uz');
   return rows;
 }
 
@@ -591,11 +611,81 @@ export async function countPlansBySubject(key) {
   return Number(rows[0].count);
 }
 
-// withPlans: rejalarni ham arxivlash (rejalar o'chirilmaydi)
-export async function deleteSubject(key, withPlans = false) {
+// Fan arxivga olinadi (o'chirilmaydi). withPlans: rejalari ham arxivlanadi.
+export async function archiveSubject(key, withPlans = false) {
   if (withPlans) await pool.query(
     'update plans set archived_at = now() where subject_key = $1 and archived_at is null', [key]);
-  await pool.query('delete from subject_extra where key = $1', [key]);
+  const r = await pool.query(
+    'update subject_extra set archived_at = now() where key = $1 and archived_at is null', [key]);
+  return r.rowCount > 0;
+}
+
+export async function restoreSubject(key) {
+  const r = await pool.query(
+    'update subject_extra set archived_at = null where key = $1 and archived_at is not null', [key]);
+  return r.rowCount > 0;
+}
+
+// Dashboard uchun: arxivlanganlari ham, rejalar soni bilan
+export async function subjectsForPanel() {
+  const { rows } = await pool.query(
+    `select s.key, s.uz, s.ru, s.alias, s.archived_at is not null as archived,
+            (select count(*)::int from plans p
+              where p.subject_key = s.key and p.archived_at is null) as plans
+       from subject_extra s
+      order by s.archived_at is not null, s.sort, s.uz`);
+  return rows.map(r => ({ ...r, alias: r.alias || [] }));
+}
+
+export async function subjectKeyExists(key) {
+  const { rows } = await pool.query('select 1 from subject_extra where key = $1', [key]);
+  return !!rows[0];
+}
+
+// Yangi fan; kalit band bo'lsa xato (ustidan yozmaydi)
+export async function insertSubject({ key, uz, ru, alias = [] }) {
+  await pool.query(
+    'insert into subject_extra (key, uz, ru, alias, sort) values ($1,$2,$3,$4,999)',
+    [key, uz, ru, JSON.stringify(alias)]);
+}
+
+// ---------- kiruvchi reja fayllari (forward) ----------
+const PENDING = 'taken_at is null and dismissed_at is null';
+
+export async function addInbox({ fileId, fileUniqueId, fileName, fileSize, caption, source, postedAt }) {
+  const r = await pool.query(
+    `insert into plan_inbox (file_id, file_unique_id, file_name, file_size, caption, source, posted_at)
+     select $1,$2,$3,$4,$5,$6,$7
+      where not exists (select 1 from plan_inbox where file_unique_id = $2 and ${PENDING})`,
+    [fileId, fileUniqueId, fileName, fileSize ?? null, caption ?? null, source ?? null, postedAt ?? null]);
+  return { added: r.rowCount > 0 };
+}
+
+export async function listInbox(limit = 200) {
+  const { rows } = await pool.query(
+    `select id, file_id, file_name, caption, source, posted_at from plan_inbox
+      where ${PENDING} order by created_at, id limit $1`, [limit]);
+  return rows.map(r => ({ ...r, id: Number(r.id) }));
+}
+
+export async function getInbox(ids) {
+  const { rows } = await pool.query(
+    `select id, file_id, file_name, caption, source, posted_at from plan_inbox
+      where id = any($1::bigint[]) and ${PENDING} order by created_at, id`, [ids]);
+  return rows.map(r => ({ ...r, id: Number(r.id) }));
+}
+
+export async function countInbox() {
+  const { rows } = await pool.query(`select count(*)::int as n from plan_inbox where ${PENDING}`);
+  return rows[0].n;
+}
+
+export async function markInbox(ids, field) {
+  if (field !== 'taken_at' && field !== 'dismissed_at') throw new Error('bad inbox field');
+  if (!ids.length) return 0;
+  const r = await pool.query(
+    `update plan_inbox set ${field} = now() where id = any($1::bigint[]) and ${PENDING}`, [ids]);
+  return r.rowCount;
 }
 
 // ---------- admin ro'yxatlari ----------

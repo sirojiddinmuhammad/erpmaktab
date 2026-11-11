@@ -1299,25 +1299,25 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
   if (cmd === 'sdel') {
     const n = await db.countPlansBySubject(parts[1]);
     if (!n) {
-      await db.deleteSubject(parts[1]);
+      await db.archiveSubject(parts[1]);
       await admin.loadExtraSubjects();
-      return ctx.reply("🗑 O'chirildi.",
+      return ctx.reply("🗄 Arxivlandi.",
         { reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
     }
     return ctx.reply(
       `⚠️ Bu fanda <b>${n} ta reja</b> bor.\n\nNima qilamiz?`,
       { parse_mode: 'HTML',
         reply_markup: new InlineKeyboard()
-          .text('🗑 Fan + rejalar arxivga', `a:sdy:${parts[1]}:1`).row()
-          .text('🗑 Faqat fanni', `a:sdy:${parts[1]}:0`).row()
+          .text('🗄 Fan + rejalar arxivga', `a:sdy:${parts[1]}:1`).row()
+          .text('🗄 Faqat fanni arxivga', `a:sdy:${parts[1]}:0`).row()
           .text('❌ Bekor', `a:sv:${parts[1]}:0`) }
     );
   }
 
   if (cmd === 'sdy') {
-    await db.deleteSubject(parts[1], parts[2] === '1');
+    await db.archiveSubject(parts[1], parts[2] === '1');
     await admin.loadExtraSubjects();
-    return ctx.reply("🗑 O'chirildi.",
+    return ctx.reply("🗄 Arxivlandi.",
       { reply_markup: new InlineKeyboard().text('📖 Fanlar', 'a:subs:0') });
   }
 
