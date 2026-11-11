@@ -134,6 +134,9 @@ update ledger l   set account_id = u.account_id from users u
  where u.tg_id = l.tg_id and l.account_id is null;
 update payments p set account_id = u.account_id from users u
  where u.tg_id = p.tg_id and p.account_id is null;
+
+-- rejalar o'chirilmaydi, arxivlanadi
+alter table plans add column if not exists archived_at timestamptz;
 `;
 
 export async function ensureSchema() { await pool.query(SCHEMA); }
@@ -402,7 +405,7 @@ export async function savePlan({ grade, subjectKey, quarter, year, medium, gradi
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      on conflict (grade, subject_key, quarter, year, medium, grading) do update
         set file_id = excluded.file_id, file_name = excluded.file_name,
-            topics = excluded.topics, created_at = now()
+            topics = excluded.topics, created_at = now(), archived_at = null
      returning *, (xmax = 0) as is_new`,
     [grade, subjectKey, quarter, year, medium, grading || 'normal',
      fileId, fileName, topics]);
@@ -413,7 +416,8 @@ export async function savePlan({ grade, subjectKey, quarter, year, medium, gradi
 export async function gradingVariants(grade, subjectKey, quarter, year, medium) {
   const { rows } = await pool.query(
     `select distinct grading from plans
-      where grade=$1 and subject_key=$2 and quarter=$3 and year=$4 and medium=$5`,
+      where grade=$1 and subject_key=$2 and quarter=$3 and year=$4 and medium=$5
+        and archived_at is null`,
     [grade, subjectKey, quarter, year, medium]);
   return rows.map(r => r.grading || 'normal');
 }
@@ -421,7 +425,7 @@ export async function gradingVariants(grade, subjectKey, quarter, year, medium) 
 // Bazada mavjud o'quv yillari
 export async function planYears() {
   const { rows } = await pool.query(
-    'select distinct year from plans where year is not null order by year desc');
+    'select distinct year from plans where year is not null and archived_at is null order by year desc');
   return rows.map(r => r.year);
 }
 
@@ -430,22 +434,36 @@ export async function planExists({ grade, subjectKey, quarter, year, medium, gra
   const { rows } = await pool.query(
     `select 1 from plans
       where grade=$1 and subject_key=$2 and quarter=$3
-        and year=$4 and medium=$5 and grading=$6 limit 1`,
+        and year=$4 and medium=$5 and grading=$6 and archived_at is null limit 1`,
     [grade, subjectKey, quarter, year, medium, grading || 'normal']);
   return !!rows[0];
 }
 
-export async function listPlans(offset = 0, limit = 15, filter = {}) {
+// Ro'yxat filtri. Tartib: medium, quarter, year, grade, grading, subjectKey, q,
+// oxirida archived (standart — faqat arxivlanmaganlar).
+export function buildPlanFilter(filter = {}) {
   const cond = [];
   const args = [];
+  const add = (col, v) => { args.push(v); cond.push(`${col} = $${args.length}`); };
 
-  if (filter.medium)  { args.push(filter.medium);  cond.push(`medium = $${args.length}`); }
-  if (filter.quarter) { args.push(filter.quarter); cond.push(`quarter = $${args.length}`); }
-  if (filter.year)    { args.push(filter.year);    cond.push(`year = $${args.length}`); }
-  if (filter.grade)   { args.push(filter.grade);   cond.push(`grade = $${args.length}`); }
-  if (filter.grading) { args.push(filter.grading); cond.push(`grading = $${args.length}`); }
+  if (filter.medium)     add('medium', filter.medium);
+  if (filter.quarter)    add('quarter', filter.quarter);
+  if (filter.year)       add('year', filter.year);
+  if (filter.grade)      add('grade', filter.grade);
+  if (filter.grading)    add('grading', filter.grading);
+  if (filter.subjectKey) add('subject_key', filter.subjectKey);
+  if (filter.q) {
+    // ilike maxsus belgilari (% _ \) oddiy belgi sifatida qidiriladi
+    args.push(`%${String(filter.q).replace(/[\\%_]/g, m => '\\' + m)}%`);
+    const n = args.length;
+    cond.push(`(file_name ilike $${n} or subject_key ilike $${n})`);
+  }
+  cond.push(filter.archived ? 'archived_at is not null' : 'archived_at is null');
+  return { where: `where ${cond.join(' and ')}`, args };
+}
 
-  const where = cond.length ? `where ${cond.join(' and ')}` : '';
+export async function listPlans(offset = 0, limit = 15, filter = {}) {
+  const { where, args } = buildPlanFilter(filter);
 
   const { rows } = await pool.query(
     `select * from plans ${where} order by grade, subject_key, grading limit $${args.length + 1} offset $${args.length + 2}`,
@@ -456,7 +474,7 @@ export async function listPlans(offset = 0, limit = 15, filter = {}) {
 }
 
 export async function countPlans() {
-  const { rows } = await pool.query('select count(*) from plans');
+  const { rows } = await pool.query('select count(*) from plans where archived_at is null');
   return Number(rows[0].count);
 }
 
@@ -465,13 +483,54 @@ export async function getPlan(id) {
   return rows[0] || null;
 }
 
-export async function deletePlan(id) {
-  await pool.query('delete from plans where id = $1', [id]);
+// Dashboard uchun: arxivlangan bo'lsa ham qaytaradi
+export const planForPanel = getPlan;
+
+export async function archivePlan(id) {
+  const r = await pool.query(
+    'update plans set archived_at = now() where id = $1 and archived_at is null', [id]);
+  return r.rowCount > 0;
+}
+
+export async function restorePlan(id) {
+  const r = await pool.query(
+    'update plans set archived_at = null where id = $1 and archived_at is not null', [id]);
+  return r.rowCount > 0;
+}
+
+export async function findPlanByKey({ grade, subjectKey, quarter, year, medium, grading }) {
+  const { rows } = await pool.query(
+    `select id, archived_at from plans
+      where grade=$1 and subject_key=$2 and quarter=$3
+        and year=$4 and medium=$5 and grading=$6 limit 1`,
+    [grade, subjectKey, quarter, year, medium, grading || 'normal']);
+  return rows[0] ? { id: Number(rows[0].id), archived: rows[0].archived_at != null } : null;
+}
+
+// Qamrov uchun: shu til va baholashdagi barcha arxivlanmagan rejalar
+export async function coverageRows({ medium, grading }) {
+  const { rows } = await pool.query(
+    `select id, grade, subject_key, quarter, year, topics from plans
+      where medium = $1 and grading = $2 and archived_at is null`,
+    [medium, grading || 'normal']);
+  return rows.map(r => ({ ...r, id: Number(r.id) }));
+}
+
+export async function panelCounts({ year, quarter, medium }) {
+  const { rows } = await pool.query(
+    `select count(*) filter (where archived_at is null)::int as total,
+            count(*) filter (where archived_at is null and year = $1
+                               and quarter = $2 and medium = $3)::int as "inQuarter",
+            count(*) filter (where archived_at is not null)::int as archived
+       from plans`,
+    [year, quarter, medium]);
+  return rows[0];
 }
 
 export async function planStats() {
   const { rows } = await pool.query(
-    `select quarter, count(*)::int as n from plans group by quarter order by quarter`);
+    `select quarter, count(*)::int as n from plans where archived_at is null
+      group by quarter order by quarter`);
   return rows;
 }
 
@@ -528,13 +587,14 @@ export async function updateSubject(key, { uz, ru, alias }) {
 
 export async function countPlansBySubject(key) {
   const { rows } = await pool.query(
-    'select count(*) from plans where subject_key = $1', [key]);
+    'select count(*) from plans where subject_key = $1 and archived_at is null', [key]);
   return Number(rows[0].count);
 }
 
-// withPlans: rejalarni ham o'chirish
+// withPlans: rejalarni ham arxivlash (rejalar o'chirilmaydi)
 export async function deleteSubject(key, withPlans = false) {
-  if (withPlans) await pool.query('delete from plans where subject_key = $1', [key]);
+  if (withPlans) await pool.query(
+    'update plans set archived_at = now() where subject_key = $1 and archived_at is null', [key]);
   await pool.query('delete from subject_extra where key = $1', [key]);
 }
 

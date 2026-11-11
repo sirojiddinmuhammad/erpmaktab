@@ -1,0 +1,20 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+process.env.DATABASE_URL ||= 'postgres://x@localhost/none';
+const { buildPlanFilter, SCHEMA } = await import('../db.js');
+
+test('buildPlanFilter: standart — faqat arxivlanmaganlar', () => {
+  assert.deepEqual(buildPlanFilter({}), { where: 'where archived_at is null', args: [] });
+});
+test('buildPlanFilter: hamma filtrlar tartib bilan', () => {
+  const r = buildPlanFilter({ medium: 'uz', grade: 5, q: 'mat', archived: true });
+  assert.equal(r.where, 'where medium = $1 and grade = $2 and (file_name ilike $3 or subject_key ilike $3) and archived_at is not null');
+  assert.deepEqual(r.args, ['uz', 5, '%mat%']);
+  const all = buildPlanFilter({ medium: 'ru', quarter: 2, year: '2026/2027', grade: 7, grading: 'bsb', subjectKey: 'math', q: 'a%b' });
+  assert.equal(all.where, 'where medium = $1 and quarter = $2 and year = $3 and grade = $4 and grading = $5 and subject_key = $6 and (file_name ilike $7 or subject_key ilike $7) and archived_at is null');
+  assert.deepEqual(all.args, ['ru', 2, '2026/2027', 7, 'bsb', 'math', '%a\\%b%']);
+});
+test('SCHEMA: archived_at faqat ADD COLUMN bilan', () => {
+  assert.match(SCHEMA, /alter table plans add column if not exists archived_at timestamptz;/);
+  assert.doesNotMatch(SCHEMA.split('archived_at')[1] ?? '', /\b(drop table|truncate|delete from)\b/i);
+});

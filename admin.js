@@ -419,7 +419,7 @@ export async function showPlan(ctx, id, backOffset = 0) {
       parse_mode: 'HTML',
       reply_markup: new InlineKeyboard()
         .text('📥 Faylni olish', `a:pf:${p.id}`)
-        .text('🗑 O\'chirish', `a:pd:${p.id}`).row()
+        .text('🗄 Arxivlash', `a:pd:${p.id}`).row()
         .text('⬅️ Orqaga', `a:plans:${backOffset}`),
     }
   );

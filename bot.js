@@ -1272,7 +1272,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
       `⚠️ Bu fanda <b>${n} ta reja</b> bor.\n\nNima qilamiz?`,
       { parse_mode: 'HTML',
         reply_markup: new InlineKeyboard()
-          .text('🗑 Fan va rejalarni', `a:sdy:${parts[1]}:1`).row()
+          .text('🗑 Fan + rejalar arxivga', `a:sdy:${parts[1]}:1`).row()
           .text('🗑 Faqat fanni', `a:sdy:${parts[1]}:0`).row()
           .text('❌ Bekor', `a:sv:${parts[1]}:0`) }
     );
@@ -1459,16 +1459,16 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return ctx.replyWithDocument(p.file_id, { caption: p.file_name || '' });
   }
 
-  if (cmd === 'pd') {   // o'chirishni tasdiqlash
-    return ctx.reply(`🗑 Rejani o'chiramizmi?`, {
+  if (cmd === 'pd') {   // arxivlashni tasdiqlash
+    return ctx.reply(`🗄 Rejani arxivlaymizmi?`, {
       reply_markup: new InlineKeyboard()
         .text('✅ Ha', `a:pdy:${parts[1]}`).text('❌ Yo\'q', `a:pv:${parts[1]}:0`),
     });
   }
 
   if (cmd === 'pdy') {
-    await db.deletePlan(Number(parts[1]));
-    return ctx.reply('🗑 O\'chirildi.', {
+    await db.archivePlan(Number(parts[1]));
+    return ctx.reply('🗄 Arxivlandi.', {
       reply_markup: new InlineKeyboard().text('🗂 Baza', 'a:pfilt'),
     });
   }
