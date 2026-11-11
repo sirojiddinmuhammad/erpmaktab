@@ -5,10 +5,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createAuth, parseCookies, sessionCookie } from './auth.js';
-import { validateFilter } from './validate.js';
+import { validateFilter, validatePlan, findDuplicates } from './validate.js';
+import { parseFileName, guessSubject } from '../hints.js';
 import { buildCoverage } from './coverage.js';
 
 const PAGE_SIZE = 50;
+const MAX_FILE = 5_000_000;
+const MAX_JSON = 1_000_000;
+const MAX_BATCH = 300;
 const SESSION_SEC = 7 * 24 * 3600;
 const EXPIRED_HTML =
   '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
@@ -22,6 +26,33 @@ export class HttpError extends Error {
 export function json(res, status, body, headers = {}) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers });
   res.end(JSON.stringify(body));
+}
+
+// Tanani o'qiydi; limitdan oshsa qolganini xotiraga yig'may tashlab 413 beradi.
+function readBody(req, limit) {
+  const declared = Number(req.headers['content-length']);
+  if (declared > limit) {
+    req.resume();
+    return Promise.reject(new HttpError(413, 'Fayl 5 MB dan katta'));
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0, over = false;
+    req.on('data', c => {
+      if (over) return;
+      size += c.length;
+      if (size > limit) { over = true; chunks.length = 0; return; }
+      chunks.push(c);
+    });
+    req.on('end', () => over ? reject(new HttpError(413, 'Fayl 5 MB dan katta')) : resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+async function readJson(req) {
+  const buf = await readBody(req, MAX_JSON);
+  try { return JSON.parse(buf.toString('utf8') || '{}'); }
+  catch { throw new HttpError(400, "So'rov noto'g'ri"); }
 }
 
 const html = (res, status, text) => {
@@ -121,6 +152,93 @@ export function createDashboard(deps) {
       'cache-control': 'no-store',
     });
     res.end(buf);
+  });
+
+  // ---------- yozish ----------
+  on('POST', /^\/api\/files$/, async (req, res) => {
+    let fileName;
+    try { fileName = path.basename(decodeURIComponent(String(req.headers['x-file-name'] || ''))).slice(0, 200); }
+    catch { fileName = ''; }
+    if (!fileName) { req.resume(); throw new HttpError(400, "Fayl nomi yo'q"); }
+    const ext = (fileName.match(/\.(xlsx?)$/i) || [])[1]?.toLowerCase();
+    if (!ext) { req.resume(); throw new HttpError(415, 'Faqat .xls yoki .xlsx'); }
+
+    const buf = await readBody(req, MAX_FILE);
+    if (!buf.length) throw new HttpError(400, "Fayl bo'sh");
+
+    let topics = null;
+    if (ext === 'xlsx') {
+      const tmp = path.join(deps.tmpDir, `panel-${crypto.randomBytes(8).toString('hex')}.xlsx`);
+      try {
+        await fs.mkdir(deps.tmpDir, { recursive: true });
+        await fs.writeFile(tmp, buf);
+        topics = (await deps.readRows(tmp)).rows.length;
+      } catch { topics = null; }
+      finally { await fs.unlink(tmp).catch(() => {}); }
+    }
+
+    let fileId;
+    try { fileId = await deps.sendDocument(buf, fileName); }
+    catch (e) { log('[panel] sendDocument', e?.message || e); throw new HttpError(502, 'telegram'); }
+
+    const h = parseFileName(fileName);
+    const grade = h.grade >= 1 && h.grade <= 11 ? h.grade : null;
+    const year = h.year && Number(h.year[1]) === Number(h.year[0]) + 1 ? `${h.year[0]}/${h.year[1]}` : null;
+    const subject = guessSubject(fileName, deps.keyOf);
+    json(res, 200, {
+      fileId, fileName, topics,
+      guess: {
+        grade,
+        subject: subject && subjectKeys().has(subject) ? subject : null,
+        grading: deps.guessGrading(fileName) === 'bsb' ? 'bsb' : null,
+        year,
+        quarter: h.quarter >= 1 && h.quarter <= 4 ? h.quarter : null,
+      },
+    });
+  });
+
+  on('POST', /^\/api\/plans\/batch$/, async (req, res) => {
+    const { rows } = await readJson(req);
+    if (!Array.isArray(rows) || rows.length > MAX_BATCH) throw new HttpError(400, `Qatorlar ro'yxati kerak (ko'pi bilan ${MAX_BATCH})`);
+    const keys = subjectKeys();
+    const skipped = [];
+    const valid = [];
+    rows.forEach((r, index) => {
+      const v = validatePlan(r, keys);
+      if (v.ok) valid.push({ index, value: v.value });
+      else skipped.push({ index, error: v.error });
+    });
+    const dups = findDuplicates(valid.map(v => v.value));
+    let created = 0, replaced = 0;
+    for (const [i, v] of valid.entries()) {
+      if (dups.has(i)) { skipped.push({ index: v.index, error: 'Takror' }); continue; }
+      const saved = await db.savePlan(v.value);
+      if (saved?.is_new) created++; else replaced++;
+    }
+    skipped.sort((a, b) => a.index - b.index);
+    json(res, 200, { created, replaced, skipped });
+  });
+
+  on('POST', /^\/api\/plans\/(\d+)\/replace$/, async (req, res, u, m) => {
+    const body = await readJson(req);
+    const p = await planOr404(m[1]);
+    const v = validatePlan({
+      grade: p.grade, subjectKey: p.subject_key, quarter: p.quarter, year: p.year,
+      medium: p.medium, grading: p.grading, fileId: body.fileId, fileName: body.fileName, topics: body.topics,
+    }, new Set([...subjectKeys(), p.subject_key]));
+    if (!v.ok) throw new HttpError(400, v.error);
+    await db.savePlan(v.value);
+    json(res, 200, { ok: true });
+  });
+
+  on('POST', /^\/api\/plans\/(\d+)\/archive$/, async (req, res, u, m) => {
+    req.resume();
+    json(res, 200, { ok: await db.archivePlan(Number(m[1])) });
+  });
+
+  on('POST', /^\/api\/plans\/(\d+)\/restore$/, async (req, res, u, m) => {
+    req.resume();
+    json(res, 200, { ok: await db.restorePlan(Number(m[1])) });
   });
 
   // ---------- kirish ----------

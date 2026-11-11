@@ -15,3 +15,8 @@ test('parseFileName: kirillcha sinf va chorak', () => {
   const h = parseFileName('6 кл Русский язык 2 четв.xlsx');
   assert.equal(h.grade, 6);
 });
+test('parseFileName: qisqa "четв" ham chorak', () => {
+  assert.equal(parseFileName('6 кл Русский язык 2 четв.xlsx').quarter, 2);
+  assert.equal(parseFileName('5 sinf 3-chorak.xlsx').quarter, 3);
+  assert.equal(parseFileName('1 четверть.xlsx').quarter, 1);
+});

@@ -19,7 +19,7 @@ export function parseFileName(fileName) {
   if (y) hints.year = [y[1], y[2]];
 
   // Chorak: "1 четверть", "1-chorak", "1 чорак"
-  const q = text.match(/(\d)\s*-?\s*(четверт|chorak|чорак|chorack)/);
+  const q = text.match(/(\d)\s*-?\s*(четв|chorak|чорак|chorack)/);
   if (q) hints.quarter = Number(q[1]);
 
   // Sinf darajasi: "2 кл", "2-класс", "4 sinf", "4-синф"
