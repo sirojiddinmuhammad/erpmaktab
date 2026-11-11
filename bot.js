@@ -14,6 +14,8 @@ import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import * as admin from './admin.js';
 import { createLifecycle } from './lifecycle.js';
+import { createDashboard } from './dashboard/server.js';
+import { withRetry } from './dashboard/telegram.js';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -1199,6 +1201,40 @@ const isAdmin = ctx => ctx.from?.id === ADMIN_ID;
 // Admin uchun joriy filtr (bitta admin bo'lgani uchun yagona obyekt yetarli)
 const planFilter = {};
 
+// Rejalar bazasi dashboardi (faqat admin, faqat Railway'da)
+const dash = createDashboard({
+  db,
+  subjects: admin.allSubjects,
+  keyOf: admin.keyOfName,
+  currentYear: admin.currentYear,
+  guessGrading: admin.guessGrading,
+  readRows,
+  sendDocument: async (buf, fileName) => {
+    const msg = await withRetry(() => bot.api.sendDocument(
+      Number(process.env.PLANS_CHAT_ID) || ADMIN_ID, new InputFile(buf, fileName),
+      { disable_notification: true }));
+    return msg.document.file_id;
+  },
+  downloadFile: async fileId => {
+    const f = await bot.api.getFile(fileId);
+    const r = await fetch(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`);
+    if (!r.ok) throw new Error(`Telegram file ${r.status}`);
+    return Buffer.from(await r.arrayBuffer());
+  },
+  publicOrigin: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`,
+  htmlPath: path.join(path.dirname(fileURLToPath(import.meta.url)), 'dashboard', 'index.html'),
+  tmpDir: TMP,
+});
+
+bot.command('panel', async ctx => {
+  if (!isAdmin(ctx)) return;
+  if (!process.env.RAILWAY_PUBLIC_DOMAIN || !process.env.PORT)
+    return ctx.reply("Dashboard faqat Railway'da ishlaydi.");
+  return ctx.reply(
+    `🔐 Dashboard: ${dash.issueLoginLink()}\n10 daqiqa amal qiladi, bir marta ishlaydi.`,
+    { link_preview_options: { is_disabled: true } });
+});
+
 bot.command('admin', async ctx => {
   if (!isAdmin(ctx)) return;
   await ctx.reply('🛠 <b>Admin panel</b>', { parse_mode: 'HTML', reply_markup: admin.panelKb() });
@@ -1597,6 +1633,7 @@ if (process.env.PORT) {
   const file = path.join(dir, 'guide.html');
 
   http.createServer(async (req, res) => {
+    if (await dash.handle(req, res)) return;
     const url = (req.url || '/').split('?')[0];
 
     if (url === '/health') {
