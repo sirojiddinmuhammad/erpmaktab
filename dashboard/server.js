@@ -7,12 +7,14 @@ import crypto from 'node:crypto';
 import { createAuth, parseCookies, sessionCookie } from './auth.js';
 import { validateFilter, validatePlan, findDuplicates } from './validate.js';
 import { parseFileName, guessSubject } from '../hints.js';
+import { quarterOfDate, schoolYearOfDate } from './inbox.js';
 import { buildCoverage } from './coverage.js';
 
 const PAGE_SIZE = 50;
 const MAX_FILE = 5_000_000;
 const MAX_JSON = 1_000_000;
 const MAX_BATCH = 300;
+const MAX_TAKE = 50;
 const SESSION_SEC = 7 * 24 * 3600;
 const EXPIRED_HTML =
   '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
@@ -70,6 +72,13 @@ function quarterOf(fileName, h) {
   return m ? Number(m[1]) : null;
 }
 
+const idsOr400 = (body, max) => {
+  const ids = body?.ids;
+  if (!Array.isArray(ids) || !ids.length || ids.length > max || !ids.every(i => Number.isInteger(i) && i > 0))
+    throw new HttpError(400, `ids: 1–${max} ta butun son`);
+  return ids;
+};
+
 const html = (res, status, text) => {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(text);
@@ -99,6 +108,43 @@ export function createDashboard(deps) {
     if (!p) throw new HttpError(404, 'Reja topilmadi');
     return p;
   };
+  // Taxmin: avval fayl nomi, keyin izoh; chorak/yil topilmasa — post sanasidan
+  const guessFrom = (fileName, caption = null, { postedAt = null } = {}) => {
+    const base = String(fileName).replace(/\.[^.]+$/, '');
+    const text = `${base} ${caption || ''}`;
+    const h = parseFileName(text + '.x');
+    const grade = h.grade >= 1 && h.grade <= 11 ? h.grade : null;
+    let year = h.year && Number(h.year[1]) === Number(h.year[0]) + 1 ? `${h.year[0]}/${h.year[1]}` : null;
+    let quarter = quarterOf(text, h);
+    if (postedAt) {
+      const d = new Date(postedAt);
+      if (!Number.isNaN(d.getTime())) {
+        quarter ??= quarterOfDate(d);
+        year ??= schoolYearOfDate(d);
+      }
+    }
+    const keys = subjectKeys();
+    const pick = k => (k && keys.has(k) ? k : null);
+    const subject = pick(guessSubject(fileName, deps.keyOf)) ||
+      (caption ? pick(guessSubject(caption + '.x', deps.keyOf)) : null);
+    return {
+      grade, subject,
+      grading: deps.guessGrading(text) === 'bsb' ? 'bsb' : null,
+      year, quarter,
+    };
+  };
+
+  const countTopics = async (buf, fileName) => {
+    if (!/\.xlsx$/i.test(fileName)) return null;
+    const tmp = path.join(deps.tmpDir, `panel-${crypto.randomBytes(8).toString('hex')}.xlsx`);
+    try {
+      await fs.mkdir(deps.tmpDir, { recursive: true });
+      await fs.writeFile(tmp, buf);
+      return (await deps.readRows(tmp)).rows.length;
+    } catch { return null; }
+    finally { await fs.unlink(tmp).catch(() => {}); }
+  };
+
   const coverage = async s =>
     buildCoverage(await db.coverageRows({ medium: s.medium, grading: s.grading }), s);
 
@@ -181,35 +227,46 @@ export function createDashboard(deps) {
     const buf = await readBody(req, MAX_FILE);
     if (!buf.length) throw new HttpError(400, "Fayl bo'sh");
 
-    let topics = null;
-    if (ext === 'xlsx') {
-      const tmp = path.join(deps.tmpDir, `panel-${crypto.randomBytes(8).toString('hex')}.xlsx`);
-      try {
-        await fs.mkdir(deps.tmpDir, { recursive: true });
-        await fs.writeFile(tmp, buf);
-        topics = (await deps.readRows(tmp)).rows.length;
-      } catch { topics = null; }
-      finally { await fs.unlink(tmp).catch(() => {}); }
-    }
+    const topics = await countTopics(buf, fileName);
 
     let fileId;
     try { fileId = await deps.sendDocument(buf, fileName); }
     catch (e) { log('[panel] sendDocument', e?.message || e); throw new HttpError(502, 'telegram'); }
 
-    const h = parseFileName(fileName);
-    const grade = h.grade >= 1 && h.grade <= 11 ? h.grade : null;
-    const year = h.year && Number(h.year[1]) === Number(h.year[0]) + 1 ? `${h.year[0]}/${h.year[1]}` : null;
-    const subject = guessSubject(fileName, deps.keyOf);
+    json(res, 200, { fileId, fileName, topics, guess: guessFrom(fileName) });
+  });
+
+  // ---------- kiruvchi (forward qilingan) fayllar ----------
+  on('GET', /^\/api\/inbox$/, async (req, res) => {
+    const rows = await db.listInbox();
     json(res, 200, {
-      fileId, fileName, topics,
-      guess: {
-        grade,
-        subject: subject && subjectKeys().has(subject) ? subject : null,
-        grading: deps.guessGrading(fileName) === 'bsb' ? 'bsb' : null,
-        year,
-        quarter: quarterOf(fileName, h),
-      },
+      count: await db.countInbox(),
+      rows: rows.map(r => ({ id: r.id, fileName: r.file_name, caption: r.caption, source: r.source, postedAt: r.posted_at })),
     });
+  });
+
+  on('POST', /^\/api\/inbox\/take$/, async (req, res) => {
+    const ids = idsOr400(await readJson(req), MAX_TAKE);
+    const out = [];
+    const taken = [];
+    for (const r of await db.getInbox(ids)) {
+      let buf;
+      try { buf = await deps.downloadFile(r.file_id); }
+      catch (e) { log('[panel] inbox download', e?.message || e); out.push({ inboxId: r.id, error: 'telegram' }); continue; }
+      out.push({
+        inboxId: r.id, fileId: r.file_id, fileName: r.file_name,
+        topics: await countTopics(buf, r.file_name),
+        guess: guessFrom(r.file_name, r.caption, { postedAt: r.posted_at }),
+      });
+      taken.push(r.id);
+    }
+    if (taken.length) await db.markInbox(taken, 'taken_at');
+    json(res, 200, { rows: out });
+  });
+
+  on('POST', /^\/api\/inbox\/dismiss$/, async (req, res) => {
+    const ids = idsOr400(await readJson(req), MAX_BATCH);
+    json(res, 200, { ok: true, n: await db.markInbox(ids, 'dismissed_at') });
   });
 
   on('POST', /^\/api\/plans\/batch$/, async (req, res) => {

@@ -11,7 +11,8 @@ export async function startPanel(over = {}) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'panel-'));
   const htmlPath = path.join(tmp, 'index.html');
   await fs.writeFile(htmlPath, '<!doctype html><title>Panel</title>');
-  const calls = { listPlans: [], savePlan: [], sendDocument: [], archive: [] };
+  const calls = { listPlans: [], savePlan: [], sendDocument: [], archive: [], markInbox: [], download: [] };
+  const inbox = over.inbox || [];
   const plans = over.plans || [];
   const db = {
     async listPlans(offset, limit, filter) { calls.listPlans.push({ offset, limit, filter }); return { rows: plans, total: plans.length }; },
@@ -23,17 +24,21 @@ export async function startPanel(over = {}) {
     async savePlan(p) { calls.savePlan.push(p); return { ...p, id: 9, is_new: true }; },
     async archivePlan(id) { calls.archive.push(id); return true; },
     async restorePlan() { return true; },
+    async listInbox() { return inbox.filter(r => !r.done); },
+    async getInbox(ids) { return inbox.filter(r => !r.done && ids.includes(r.id)); },
+    async countInbox() { return inbox.filter(r => !r.done).length; },
+    async markInbox(ids, field) { calls.markInbox.push({ ids, field }); for (const r of inbox) if (ids.includes(r.id)) r.done = field; return ids.length; },
     ...over.db,
   };
   const dash = createDashboard({
     db,
     subjects: () => [{ key: 'math', uz: 'Matematika', ru: 'Математика' }, { key: 'russian', uz: 'Rus tili', ru: 'Русский язык' }],
-    keyOf: name => (/русский/i.test(name) ? 'russian' : null),
+    keyOf: name => (/русский/i.test(name) ? 'russian' : /matematika/i.test(name) ? 'math' : null),
     currentYear: () => '2026/2027',
     guessGrading: () => null,
     readRows: async () => ({ rows: [{ topic: 'a', hw: '' }, { topic: 'b', hw: 'x' }] }),
     sendDocument: async (buf, fileName) => { calls.sendDocument.push({ size: buf.length, fileName }); return 'FILE1'; },
-    downloadFile: async () => Buffer.from('xlsx-bytes'),
+    downloadFile: async id => { calls.download.push(id); return Buffer.from('xlsx-bytes'); },
     publicOrigin: ORIGIN,
     htmlPath,
     tmpDir: tmp,
