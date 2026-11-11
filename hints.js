@@ -87,3 +87,15 @@ export function filterOptions(fieldLabel, options, hints) {
 
 // Fayldan aniqlangani xavfsiz avtomat qo'yiladigan maydonlar
 export const AUTO_FIELDS = new Set(['Учебный год', 'Учебный период']);
+
+// Fayl nomidan fanni taxmin qiladi: avval keyOf (bazadagi fanlar va tanish
+// so'zlar), keyin kodagi lug'at. Bot ham, dashboard ham shundan foydalanadi.
+export function guessSubject(fileName, keyOf = () => null) {
+  const base = String(fileName || '')
+    .replace(/\.[^.]+$/, '')            // kengaytma
+    .replace(/@[\w.-]+/g, ' ')          // @kanal
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, ' ')
+    .replace(/[_]+/g, ' ');
+
+  return keyOf(base) || subjectKey(base);
+}

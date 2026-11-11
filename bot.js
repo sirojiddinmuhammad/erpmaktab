@@ -9,11 +9,10 @@ if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENC_KEY)) {
 import { Bot, InlineKeyboard, Keyboard, InputFile } from 'grammy';
 import { EmaktabSession, FIELD_LABELS } from './emaktab.js';
 import { readRows, writeRows, parsePairs, applyMerges } from './xlsx.js';
-import { parseFileName, filterOptions, AUTO_FIELDS } from './hints.js';
+import { parseFileName, filterOptions, AUTO_FIELDS, guessSubject } from './hints.js';
 import { t, money, LANGS, LANG_NAME } from './i18n.js';
 import * as db from './db.js';
 import * as admin from './admin.js';
-import { subjectKey } from './subjects.js';
 import { createLifecycle } from './lifecycle.js';
 
 import fs from 'node:fs/promises';
@@ -734,7 +733,7 @@ bot.on('message:document', async ctx => {
       name: doc.file_name,
       topics,
       gradeGuess: h.grade || null,
-      subjectGuess: guessSubject(doc.file_name, af.medium),
+      subjectGuess: guessSubject(doc.file_name, admin.keyOfName),
     });
     af.total = af.queue.length;
 
@@ -1329,7 +1328,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
 
     await admin.autoBulk(ctx, f, {
       parseFileName,
-      keyOf: name => guessSubject(name, f.medium),
+      keyOf: name => guessSubject(name, admin.keyOfName),
     });
     return;
   }
@@ -1565,18 +1564,6 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     return admin.broadcast(bot, ctx, f.audience, f.text);
   }
 });
-
-// Fayl nomidan fanni taxmin qilamiz
-function guessSubject(fileName, medium) {
-  const base = String(fileName || '')
-    .replace(/\.[^.]+$/, '')            // kengaytma
-    .replace(/@[\w.-]+/g, ' ')          // @kanal
-    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, ' ')
-    .replace(/[_]+/g, ' ');
-
-  // Avval bazadagi fanlar va tanish so'zlar, keyin kodagi lug'at
-  return admin.keyOfName(base) || subjectKey(base);
-}
 
 // Ommaviy yuklash: navbatdagi faylni so'raymiz
 async function askBulkFile(ctx) {
