@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Rejalar bazasi</title>
+<script>try { const t = localStorage.getItem('panel-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <style>
 :root {
   --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #66707a; --line: #e3e6ea;
@@ -76,6 +77,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 dialog .head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
 dialog .body { padding: 8px 16px 16px; }
 [hidden] { display: none !important; }
+.inbox-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--ok-bg); border-color: transparent; }
+.inbox-bar b { flex: 1; min-width: 180px; }
+.form-grid { display: grid; gap: 10px; }
+.form-grid input { width: 100%; }
+.row-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
 nav button { white-space: nowrap; }
 @media (max-width: 640px) { main { padding: 12px 16px 32px; } header { padding: 10px 16px; justify-content: space-between; } nav { order: 3; flex-basis: 100%; } input[type="search"] { width: 100%; } }
 </style>
@@ -88,8 +94,12 @@ nav button { white-space: nowrap; }
     <button role="tab" data-tab="plans" aria-selected="true">Rejalar</button>
     <button role="tab" data-tab="coverage" aria-selected="false">Qamrov</button>
     <button role="tab" data-tab="bulk" aria-selected="false">Ommaviy yuklash</button>
+    <button role="tab" data-tab="subjects" aria-selected="false">Fanlar</button>
   </nav>
-  <form method="post" action="/panel/logout"><button class="btn" type="submit">Chiqish</button></form>
+  <span style="display:flex;gap:8px">
+    <button class="btn" id="theme" type="button" title="Kunduzgi / kechki rejim" aria-label="Kunduzgi / kechki rejim">🌙</button>
+    <form method="post" action="/panel/logout"><button class="btn" type="submit">Chiqish</button></form>
+  </span>
 </header>
 
 <main>
@@ -150,6 +160,11 @@ nav button { white-space: nowrap; }
       </div>
       <p class="muted" id="prefill-note" style="margin:10px 0 0" hidden></p>
     </div>
+    <div class="card inbox-bar" id="inbox" hidden>
+      <b>📥 Kiruvchi: <span id="inbox-n">0</span> ta fayl</b>
+      <button class="btn primary" id="inbox-take" type="button">Jadvalga olish</button>
+      <button class="btn" id="inbox-list" type="button">Ro'yxatni ko'rish</button>
+    </div>
     <div class="card">
       <div class="drop" id="drop" tabindex="0">Fayllarni shu yerga tashlang yoki <u>tanlang</u> · faqat .xls / .xlsx, har biri 5 MB gacha</div>
       <input type="file" id="pick" multiple accept=".xls,.xlsx" hidden>
@@ -166,6 +181,27 @@ nav button { white-space: nowrap; }
         <span style="display:flex;gap:8px"><button class="btn" id="b-clear">Tozalash</button><button class="btn primary" id="b-save" disabled>Saqlash</button></span>
       </div>
       <p class="msg" id="bulk-msg"></p>
+    </div>
+  </section>
+
+  <!-- ============ Fanlar ============ -->
+  <section id="tab-subjects" hidden>
+    <div class="card">
+      <div class="filters">
+        <label class="f">Qidiruv<input type="search" id="subj-q" placeholder="Nom yoki tanish so'z"></label>
+        <label class="f" style="flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="subj-arch"> Arxiv</label>
+        <span style="flex:1"></span>
+        <button class="btn primary" id="subj-add" type="button">➕ Fan qo'shish</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>O'zbekcha</th><th>Ruscha</th><th>Tanish so'zlar</th><th class="num">Rejalar</th><th></th></tr></thead>
+          <tbody id="subj-body"></tbody>
+        </table>
+      </div>
+      <p class="msg" id="subj-msg"></p>
     </div>
   </section>
 </main>
@@ -249,14 +285,17 @@ function renderSubjectFilter() {
 const gradeOpts = () => Array.from({ length: 11 }, (_, i) => ({ value: String(i + 1), label: `${i + 1}-sinf` }));
 
 // ---------- tablar ----------
+const TABS = ['plans', 'coverage', 'bulk', 'subjects'];
 function showTab(name) {
   $$('nav [role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
-  ['plans', 'coverage', 'bulk'].forEach(t => { $('#tab-' + t).hidden = t !== name; });
+  TABS.forEach(t => { $('#tab-' + t).hidden = t !== name; });
   const u = new URL(location.href);
   u.searchParams.set('tab', name);
   history.replaceState(null, '', u);
   if (name === 'plans') loadPlans();
   if (name === 'coverage') loadCoverage();
+  if (name === 'bulk') loadInbox();
+  if (name === 'subjects') loadSubjects();
 }
 $$('nav [role=tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -458,18 +497,21 @@ function addFiles(list) {
   }
   renderBulk();
 }
+function applyUpload(r, d) {
+  const g = d.guess || {};
+  Object.assign(r, {
+    state: 'done', fileId: d.fileId, fileName: d.fileName, topics: d.topics,
+    grade: g.grade || null, subject: g.subject || null,
+    quarter: g.quarter || Number(bf('quarter').value),
+    year: g.year || bf('year').value,
+    bsb: g.grading ? g.grading === 'bsb' : bf('grading').value === 'bsb',
+    saveError: '',
+  });
+}
 async function uploadRow(r) {
   r.state = 'up'; r.error = ''; renderBulk();
   try {
-    const d = await uploadFile(r.file);
-    const g = d.guess || {};
-    Object.assign(r, {
-      state: 'done', fileId: d.fileId, fileName: d.fileName, topics: d.topics,
-      grade: g.grade || null, subject: g.subject || null,
-      quarter: g.quarter || Number(bf('quarter').value),
-      year: g.year || bf('year').value,
-      bsb: g.grading ? g.grading === 'bsb' : bf('grading').value === 'bsb',
-    });
+    applyUpload(r, await uploadFile(r.file));
     if (prefill) {
       r.grade = prefill.grade; r.subject = prefill.subject; prefill = null;
       $('#prefill-note').hidden = true;
@@ -495,6 +537,7 @@ function statusOf(r, dups) {
   if (r.state === 'rejected') return { cls: 'st-bad', text: '❌ ' + r.error };
   if (r.state === 'up') return { cls: '', text: '⏳ Yuklanmoqda' };
   if (r.state === 'err') return { cls: 'st-bad', text: '❌ ' + r.error };
+  if (r.saveError) return { cls: 'st-bad', text: '❌ ' + r.saveError };
   if (!complete(r)) return { cls: 'st-warn', text: '⚠️ Sinf yoki fan tanlanmagan' };
   if (dups.has(keyOf(r))) return { cls: 'st-warn', text: '⚠️ Takror' };
   if (r.exists) return { cls: '', text: '🔄 Almashtiradi' };
@@ -516,7 +559,7 @@ function renderBulk() {
     const sel = (field, opts, val) => `<select data-f="${field}" ${editable ? '' : 'disabled'}><option value="">—</option>${
       opts.map(o => `<option value="${esc(o.value)}" ${String(val ?? '') === String(o.value) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
     return `<tr data-uid="${r.uid}" class="${st.cls}">
-      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name)}">${esc(r.name)}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name)}">${r.fromInbox ? '📥 ' : ''}${esc(r.name)}</td>
       <td>${sel('grade', gradeOpts(), r.grade)}</td>
       <td>${sel('subject', sOpts, r.subject)}</td>
       <td>${sel('quarter', [1, 2, 3, 4].map(q => ({ value: String(q), label: String(q) })), r.quarter)}</td>
@@ -524,7 +567,7 @@ function renderBulk() {
       <td><input type="checkbox" data-f="bsb" ${r.bsb ? 'checked' : ''} ${editable ? '' : 'disabled'}></td>
       <td class="num">${r.topics ?? '—'}</td>
       <td class="status">${esc(st.text)}</td>
-      <td class="actions">${r.state === 'err' ? '<button class="btn" data-act="retry">Qayta urinish</button>' : ''}<button class="btn" data-act="remove" title="Ro'yxatdan olib tashlash">✕</button></td>
+      <td class="actions">${r.state === 'err' && r.file ? '<button class="btn" data-act="retry">Qayta urinish</button>' : ''}<button class="btn" data-act="remove" title="Ro'yxatdan olib tashlash">✕</button></td>
     </tr>`;
   }).join('') : '<tr><td colspan="9" class="muted">Hali fayl yo\'q.</td></tr>';
   const ready = rows.filter(r => complete(r) && !dups.has(keyOf(r))).length;
@@ -542,6 +585,7 @@ $('#bulk-body').addEventListener('change', e => {
   if (f === 'bsb') r.bsb = e.target.checked;
   else if (f === 'grade' || f === 'quarter') r[f] = e.target.value ? Number(e.target.value) : null;
   else r[f] = e.target.value || null;
+  r.saveError = '';
   checkExists(r);
   renderBulk();
 });
@@ -571,7 +615,7 @@ $('#b-save').addEventListener('click', async () => {
       grading: r.bsb ? 'bsb' : 'normal', fileId: r.fileId, fileName: r.fileName, topics: r.topics })) });
     const failed = new Map(d.skipped.map(s => [s.index, s.error]));
     ready.forEach((r, i) => {
-      if (failed.has(i)) { r.state = 'err'; r.error = failed.get(i); }
+      if (failed.has(i)) r.saveError = failed.get(i) === 'server' ? 'Saqlanmadi, qayta bosing' : failed.get(i);
     });
     const saved = new Set(ready.filter((_, i) => !failed.has(i)));
     rows = rows.filter(r => !saved.has(r));
@@ -605,6 +649,192 @@ $('#recheck').addEventListener('click', async () => {
   } catch { /* banner qoladi */ }
 });
 
+// ============ Rejim ============
+const darkNow = () => document.documentElement.dataset.theme
+  ? document.documentElement.dataset.theme === 'dark'
+  : matchMedia('(prefers-color-scheme: dark)').matches;
+function paintThemeButton() { $('#theme').textContent = darkNow() ? '☀️' : '🌙'; }
+$('#theme').addEventListener('click', () => {
+  const next = darkNow() ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('panel-theme', next); } catch (e) { /* saqlanmasa ham ishlaydi */ }
+  paintThemeButton();
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', paintThemeButton);
+paintThemeButton();
+
+// ============ Kiruvchi fayllar ============
+let inboxRows = [];
+async function loadInbox() {
+  try {
+    const d = await api('/api/inbox');
+    inboxRows = d.rows;
+    $('#inbox-n').textContent = d.count;
+    $('#inbox').hidden = !d.count;
+  } catch { /* blok ko'rinmaydi */ }
+}
+setInterval(() => { if (!$('#tab-bulk').hidden && !sessionLost && !document.hidden) loadInbox(); }, 30000);
+
+$('#inbox-take').addEventListener('click', async () => {
+  const b = $('#inbox-take');
+  b.disabled = true;
+  let ok = 0, bad = 0;
+  const tried = new Set();
+  try {
+    for (;;) {
+      const ids = inboxRows.filter(r => !tried.has(r.id)).slice(0, 50).map(r => r.id);
+      if (!ids.length) break;
+      ids.forEach(i => tried.add(i));
+      $('#bulk-msg').textContent = `⏳ Kiruvchi fayllar olinmoqda… (${ok + bad} ta tayyor)`;
+      const d = await postJson('/api/inbox/take', { ids });
+      for (const x of d.rows) {
+        if (x.error) { bad++; continue; }
+        const r = { uid: ++uidSeq, name: x.fileName, fromInbox: true };
+        applyUpload(r, x);
+        rows.push(r);
+        checkExists(r);
+        ok++;
+      }
+      renderBulk();
+      await loadInbox();
+    }
+    $('#bulk-msg').textContent = `📥 Jadvalga olindi: ${ok} ta` + (bad ? ` · Telegram'dan olinmadi: ${bad} ta (kiruvchida qoldi)` : '');
+  } catch (e) {
+    if (e.status !== 401) $('#bulk-msg').textContent = '❌ ' + errText(e);
+  }
+  b.disabled = false;
+});
+
+function renderInboxDialog() {
+  $('#dlg-title').textContent = `📥 Kiruvchi fayllar · ${inboxRows.length} ta`;
+  $('#dlg-body').innerHTML = inboxRows.length ? `<div class="table-wrap"><table><thead><tr><th>Fayl</th><th>Izoh</th><th>Kanal</th><th>Sana</th><th></th></tr></thead><tbody>${
+    inboxRows.map(r => `<tr data-id="${r.id}">
+      <td>${esc(r.fileName)}</td>
+      <td class="muted" style="max-width:260px">${esc(r.caption || '')}</td>
+      <td class="muted">${esc(r.source || '')}</td>
+      <td class="muted" style="white-space:nowrap">${esc(String(r.postedAt || '').slice(0, 10))}</td>
+      <td><button class="btn" data-act="dismiss">Kerak emas</button></td></tr>`).join('')
+  }</tbody></table></div>` : '<p class="muted">Kiruvchi fayl yo\'q.</p>';
+}
+$('#inbox-list').addEventListener('click', async () => {
+  await loadInbox();
+  renderInboxDialog();
+  $('#dlg').showModal();
+});
+$('#dlg-body').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act=dismiss]');
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await postJson('/api/inbox/dismiss', { ids: [Number(b.closest('tr').dataset.id)] });
+    await loadInbox();
+    renderInboxDialog();
+  } catch (err) { b.disabled = false; }
+});
+
+// ============ Fanlar ============
+let subjRows = [];
+async function loadSubjects() {
+  try {
+    subjRows = (await api('/api/subjects')).rows;
+    renderSubjects();
+  } catch (e) {
+    if (e.status !== 401) $('#subj-msg').textContent = errText(e);
+  }
+}
+function renderSubjects() {
+  const q = $('#subj-q').value.trim().toLowerCase();
+  const arch = $('#subj-arch').checked;
+  const list = subjRows.filter(s => s.archived === arch && (!q ||
+    [s.uz, s.ru, s.key, ...(s.alias || [])].some(x => String(x || '').toLowerCase().includes(q))));
+  $('#subj-body').innerHTML = list.length ? list.map(s => `<tr data-key="${esc(s.key)}">
+    <td>${esc(s.uz)}</td>
+    <td>${esc(s.ru || '—')}</td>
+    <td class="muted" style="max-width:320px">${esc((s.alias || []).join(', '))}</td>
+    <td class="num">${s.plans}</td>
+    <td class="actions">${arch
+      ? '<button class="btn" data-act="restore">Qaytarish</button>'
+      : '<button class="btn" data-act="edit">Tahrirlash</button><button class="btn danger" data-act="archive">O\'chirish</button>'}</td>
+  </tr>`).join('') : `<tr><td colspan="5" class="muted">${arch ? 'Arxivda fan yo\'q.' : 'Fan topilmadi.'}</td></tr>`;
+}
+$('#subj-q').addEventListener('input', renderSubjects);
+$('#subj-arch').addEventListener('change', renderSubjects);
+
+async function afterSubjectChange(msg) {
+  $('#subj-msg').textContent = msg;
+  await loadSubjects();
+  try { meta = await api('/api/meta'); renderSubjectFilter(); renderBulk(); } catch { /* keyingi yuklashda */ }
+}
+
+function subjectForm(s) {
+  $('#dlg-title').textContent = s ? `Tahrirlash · ${s.uz}` : "Yangi fan";
+  $('#dlg-body').innerHTML = `<form id="subj-form" class="form-grid">
+    <label class="f">O'zbekcha nomi *<input type="text" name="uz" maxlength="80" required value="${esc(s?.uz || '')}"></label>
+    <label class="f">Ruscha nomi<input type="text" name="ru" maxlength="80" value="${esc(s?.ru || '')}" placeholder="Bo'sh qolsa o'zbekchasi olinadi"></label>
+    <label class="f">Tanish so'zlar (vergul bilan)<input type="text" name="alias" value="${esc((s?.alias || []).join(', '))}" placeholder="Masalan: Тех. труд, Mehnat"></label>
+    <p class="muted" style="margin:0">Tanish so'zlar fayl nomida yoki eMaktab'da uchrasa, fayl shu fanga biriktiriladi.</p>
+    <p class="msg" id="subj-form-msg"></p>
+    <div class="row-actions"><button class="btn" type="button" data-close>Bekor</button><button class="btn primary" type="submit">Saqlash</button></div>
+  </form>`;
+  $('#dlg').showModal();
+  $('#subj-form [name=uz]').focus();
+  $('#subj-form [data-close]').addEventListener('click', () => $('#dlg').close());
+  $('#subj-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const body = { uz: f.uz.value, ru: f.ru.value, alias: f.alias.value.split(',').map(x => x.trim()).filter(Boolean) };
+    f.querySelector('[type=submit]').disabled = true;
+    try {
+      if (s) await postJson(`/api/subjects/${encodeURIComponent(s.key)}`, body);
+      else await postJson('/api/subjects', body);
+      $('#dlg').close();
+      await afterSubjectChange(s ? `✅ Saqlandi: ${body.uz}` : `✅ Qo'shildi: ${body.uz}`);
+    } catch (err) {
+      f.querySelector('[type=submit]').disabled = false;
+      $('#subj-form-msg').textContent = '❌ ' + errText(err);
+    }
+  });
+}
+$('#subj-add').addEventListener('click', () => subjectForm(null));
+
+async function archiveSubject(s, withPlans) {
+  await postJson(`/api/subjects/${encodeURIComponent(s.key)}/archive`, { withPlans });
+  await afterSubjectChange(`🗄 Arxivlandi: ${s.uz}` + (withPlans ? ` (${s.plans} ta reja bilan)` : ''));
+}
+$('#subj-body').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b) return;
+  const s = subjRows.find(x => x.key === b.closest('tr').dataset.key);
+  if (!s) return;
+  try {
+    if (b.dataset.act === 'edit') return subjectForm(s);
+    if (b.dataset.act === 'restore') {
+      await postJson(`/api/subjects/${encodeURIComponent(s.key)}/restore`, {});
+      return afterSubjectChange(`✅ Qaytarildi: ${s.uz}`);
+    }
+    if (b.dataset.act === 'archive') {
+      if (!s.plans) {
+        if (confirm(`"${s.uz}" fani o'chirilsinmi? Uni keyin "Arxiv"dan qaytarish mumkin.`)) await archiveSubject(s, false);
+        return;
+      }
+      $('#dlg-title').textContent = `O'chirish · ${s.uz}`;
+      $('#dlg-body').innerHTML = `<p>Bu fanda <b>${s.plans} ta reja</b> bor. Nima qilamiz?</p>
+        <div class="row-actions">
+          <button class="btn" type="button" data-pick="cancel">Bekor</button>
+          <button class="btn" type="button" data-pick="only">Faqat fanni</button>
+          <button class="btn danger" type="button" data-pick="plans">Fan + rejalar arxivga</button>
+        </div>`;
+      $('#dlg').showModal();
+      $('#dlg-body').querySelectorAll('[data-pick]').forEach(x => x.addEventListener('click', async () => {
+        $('#dlg').close();
+        if (x.dataset.pick !== 'cancel') await archiveSubject(s, x.dataset.pick === 'plans');
+      }));
+    }
+  } catch (err) {
+    if (err.status !== 401) $('#subj-msg').textContent = '❌ ' + errText(err);
+  }
+});
+
 // ---------- boshlash ----------
 async function init() {
   try { meta = await api('/api/meta'); } catch { return; }
@@ -626,7 +856,7 @@ async function init() {
     $(`#${id} [name=quarter]`).value = String(guessQuarter());
   }
   renderBulk();
-  showTab(['plans', 'coverage', 'bulk'].includes(params.get('tab')) ? params.get('tab') : 'plans');
+  showTab(TABS.includes(params.get('tab')) ? params.get('tab') : 'plans');
 }
 init();
 </script>
