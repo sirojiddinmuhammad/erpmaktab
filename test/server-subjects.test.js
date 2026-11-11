@@ -44,3 +44,28 @@ test('fanlar: arxiv, qaytarish, yomon kalit, Origin', async () => {
     assert.equal(p.calls.reload, 4);
   } finally { await p.close(); }
 });
+
+test("'+' li eski kalit (algebra+geometry) tahrirlanadi va arxivlanadi", async () => {
+  const p = await startPanel();
+  try {
+    const cookie = await p.login();
+    const k = encodeURIComponent('algebra+geometry');
+    assert.deepEqual(await (await post(p, cookie, `/api/subjects/${k}`, { uz: 'Algebra' })).json(), { ok: true });
+    assert.deepEqual(await (await post(p, cookie, `/api/subjects/${k}/archive`, {})).json(), { ok: true });
+    assert.deepEqual(p.calls.subjects.at(-1), ['archive', 'algebra+geometry', false]);
+    assert.equal((await post(p, cookie, '/api/subjects/' + 'a'.repeat(65) + '/archive')).status, 404);
+  } finally { await p.close(); }
+});
+
+test('arxivlangan fan: meta nomini beradi, rejalar filtri uni qabul qiladi', async () => {
+  const p = await startPanel();
+  try {
+    const cookie = await p.login();
+    const m = await (await fetch(p.base + '/api/meta', { headers: { cookie } })).json();
+    assert.deepEqual(m.archivedSubjects, [{ key: 'x-robot', uz: 'Robototexnika', ru: 'Робототехника' }]);
+    assert.equal(m.subjects.some(s => s.key === 'x-robot'), false);
+    const r = await fetch(p.base + '/api/plans?subject=x-robot', { headers: { cookie } });
+    assert.equal(r.status, 200);
+    assert.equal(p.calls.listPlans.at(-1).filter.subjectKey, 'x-robot');
+  } finally { await p.close(); }
+});

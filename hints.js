@@ -90,12 +90,14 @@ export const AUTO_FIELDS = new Set(['Учебный год', 'Учебный п�
 
 // Fayl nomidan fanni taxmin qiladi: avval keyOf (bazadagi fanlar va tanish
 // so'zlar), keyin kodagi lug'at. Bot ham, dashboard ham shundan foydalanadi.
-export function guessSubject(fileName, keyOf = () => null) {
+// allowed berilsa — undan tashqaridagi (masalan arxivlangan) kalit qaytmaydi.
+export function guessSubject(fileName, keyOf = () => null, allowed = null) {
   const base = String(fileName || '')
     .replace(/\.[^.]+$/, '')            // kengaytma
     .replace(/@[\w.-]+/g, ' ')          // @kanal
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, ' ')
     .replace(/[_]+/g, ' ');
 
-  return keyOf(base) || subjectKey(base);
+  const key = keyOf(base) || subjectKey(base);
+  return key && allowed && !allowed.has(key) ? null : key;
 }

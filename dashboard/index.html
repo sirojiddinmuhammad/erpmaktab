@@ -238,7 +238,7 @@ const errText = e => e.status === 401 ? 'Sessiya tugadi' : e.status >= 500 && e.
 
 // ---------- yordamchilar ----------
 const subjName = (key, medium) => {
-  const s = meta.subjects.find(x => x.key === key);
+  const s = meta.subjects.find(x => x.key === key) || (meta.archivedSubjects || []).find(x => x.key === key);
   if (!s) return key;
   return (medium === 'ru' ? s.ru || s.uz : s.uz || s.ru) || key;
 };

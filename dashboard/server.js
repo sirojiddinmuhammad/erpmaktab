@@ -8,7 +8,7 @@ import { createAuth, parseCookies, sessionCookie } from './auth.js';
 import { validateFilter, validatePlan, findDuplicates } from './validate.js';
 import { parseFileName, guessSubject } from '../hints.js';
 import { quarterOfDate, schoolYearOfDate } from './inbox.js';
-import { makeSubjectKey, validateSubject, SUBJECT_KEY_RE } from './subjects.js';
+import { makeSubjectKey, validateSubject } from './subjects.js';
 import { buildCoverage } from './coverage.js';
 
 const PAGE_SIZE = 50;
@@ -93,8 +93,10 @@ export function createDashboard(deps) {
   const routes = [];   // [method, RegExp, handler]
   const on = (method, re, fn) => routes.push([method, re, fn]);
 
-  const filterOr400 = query => {
-    const f = validateFilter(query, subjectKeys());
+  const archivedSubjects = async () =>
+    (await db.subjectsForPanel()).filter(s => s.archived).map(({ key, uz, ru }) => ({ key, uz, ru }));
+  const filterOr400 = (query, keys = subjectKeys()) => {
+    const f = validateFilter(query, keys);
     if (!f.ok) throw new HttpError(400, f.error);
     return f.value;
   };
@@ -152,12 +154,14 @@ export function createDashboard(deps) {
   // ---------- o'qish ----------
   on('GET', /^\/api\/meta$/, async (req, res) => json(res, 200, {
     subjects: deps.subjects().map(({ key, uz, ru }) => ({ key, uz, ru })),
+    archivedSubjects: await archivedSubjects(),   // faqat nom va filtr uchun
     years: await db.planYears(),
     currentYear: deps.currentYear(),
   }));
 
   on('GET', /^\/api\/plans$/, async (req, res, u) => {
-    const { page, ...filter } = filterOr400(u.searchParams);
+    const keys = new Set([...subjectKeys(), ...(await archivedSubjects()).map(s => s.key)]);
+    const { page, ...filter } = filterOr400(u.searchParams, keys);
     const { rows, total } = await db.listPlans((page - 1) * PAGE_SIZE, PAGE_SIZE, filter);
     json(res, 200, { rows, total, page, pageSize: PAGE_SIZE });
   });
@@ -172,7 +176,7 @@ export function createDashboard(deps) {
   on('GET', /^\/api\/coverage$/, async (req, res, u) => {
     const s = sliceOr400(u.searchParams);
     const cov = await coverage(s);
-    const byKey = new Map(deps.subjects().map(x => [x.key, x]));
+    const byKey = new Map([...(await archivedSubjects()), ...deps.subjects()].map(x => [x.key, x]));
     const names = {};
     for (const k of cov.subjects) {
       const x = byKey.get(k);
@@ -238,10 +242,11 @@ export function createDashboard(deps) {
   });
 
   // ---------- fanlar ----------
+  // Eski kalitlarda '+' ham bor (algebra+geometry); kalit faqat parametr sifatida ishlatiladi
   const keyOr404 = raw => {
     let k;
     try { k = decodeURIComponent(raw); } catch { k = ''; }
-    if (!SUBJECT_KEY_RE.test(k)) throw new HttpError(404, 'Fan topilmadi');
+    if (!k || k.length > 64 || k.includes('/')) throw new HttpError(404, 'Fan topilmadi');
     return k;
   };
   const subjectOr400 = body => {

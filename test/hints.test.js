@@ -15,3 +15,7 @@ test('parseFileName: kirillcha sinf va chorak', () => {
   const h = parseFileName('6 кл Русский язык 2 четв.xlsx');
   assert.equal(h.grade, 6);
 });
+test('guessSubject: ruxsat etilgan kalitlar bo\'lmasa null (arxivlangan fan)', () => {
+  assert.equal(guessSubject('9 sinf Matematika.xlsx', () => null, new Set(['history'])), null);
+  assert.equal(guessSubject('9 sinf Matematika.xlsx', () => null, new Set(['math'])), 'math');
+});

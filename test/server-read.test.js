@@ -40,7 +40,7 @@ test('sessiya bilan: panel, meta, plans, filtr xatosi, logout', async () => {
     assert.match(await h.text(), /<title>Panel/);
 
     const m = await (await fetch(p.base + '/api/meta', { headers: { cookie } })).json();
-    assert.deepEqual(m, { subjects: [{ key: 'math', uz: 'Matematika', ru: 'Математика' }, { key: 'russian', uz: 'Rus tili', ru: 'Русский язык' }], years: ['2026/2027'], currentYear: '2026/2027' });
+    assert.deepEqual(m, { subjects: [{ key: 'math', uz: 'Matematika', ru: 'Математика' }, { key: 'russian', uz: 'Rus tili', ru: 'Русский язык' }], archivedSubjects: [{ key: 'x-robot', uz: 'Robototexnika', ru: 'Робототехника' }], years: ['2026/2027'], currentYear: '2026/2027' });
 
     const r = await fetch(p.base + '/api/plans?grade=5&page=2', { headers: { cookie } });
     assert.equal(r.status, 200);

@@ -736,7 +736,7 @@ bot.on('message:document', async ctx => {
       name: doc.file_name,
       topics,
       gradeGuess: h.grade || null,
-      subjectGuess: guessSubject(doc.file_name, admin.keyOfName),
+      subjectGuess: guessSubject(doc.file_name, admin.keyOfName, liveSubjectKeys()),
     });
     af.total = af.queue.length;
 
@@ -1210,6 +1210,8 @@ bot.callbackQuery('go', async ctx => {
 
 // ---------- admin paneli ----------
 const isAdmin = ctx => ctx.from?.id === ADMIN_ID;
+// Arxivlanmagan fanlar kalitlari (arxivdagi fan taxmin qilinmasin)
+const liveSubjectKeys = () => new Set(admin.allSubjects().map(s => s.key));
 
 // Admin uchun joriy filtr (bitta admin bo'lgani uchun yagona obyekt yetarli)
 const planFilter = {};
@@ -1382,7 +1384,7 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
 
     await admin.autoBulk(ctx, f, {
       parseFileName,
-      keyOf: name => guessSubject(name, admin.keyOfName),
+      keyOf: name => guessSubject(name, admin.keyOfName, liveSubjectKeys()),
     });
     return;
   }

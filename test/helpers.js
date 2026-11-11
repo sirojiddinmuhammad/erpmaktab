@@ -12,7 +12,7 @@ export async function startPanel(over = {}) {
   const htmlPath = path.join(tmp, 'index.html');
   await fs.writeFile(htmlPath, '<!doctype html><title>Panel</title>');
   const calls = { listPlans: [], savePlan: [], sendDocument: [], archive: [], markInbox: [], download: [], subjects: [], reload: 0 };
-  const subjects = new Map([['math', { key: 'math', uz: 'Matematika', ru: 'Математика', alias: [], plans: 2, archived: false }]]);
+  const subjects = new Map([['math', { key: 'math', uz: 'Matematika', ru: 'Математика', alias: [], plans: 2, archived: false }], ['algebra+geometry', { key: 'algebra+geometry', uz: 'Algebra va geometriya', ru: 'Алгебра и геометрия', alias: [], plans: 0, archived: false }], ['x-robot', { key: 'x-robot', uz: 'Robototexnika', ru: 'Робототехника', alias: [], plans: 1, archived: true }]]);
   const inbox = over.inbox || [];
   const plans = over.plans || [];
   const db = {
