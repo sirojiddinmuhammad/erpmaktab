@@ -80,6 +80,17 @@ const idsOr400 = (body, max) => {
   return ids;
 };
 
+// Sinflar: "1-4 sinf" / "5–6 кл" oralig'i yoki bitta sinf
+function gradesOf(text, h) {
+  const m = String(text).toLowerCase()
+    .match(/(?:^|\D)(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*-?\s*(?:кл|класс|sinf|синф|klass)/);
+  if (m) {
+    const lo = Number(m[1]), hi = Number(m[2]);
+    if (lo >= 1 && hi <= 11 && lo < hi) return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  }
+  return h.grade >= 1 && h.grade <= 11 ? [h.grade] : [];
+}
+
 const html = (res, status, text) => {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(text);
@@ -116,7 +127,8 @@ export function createDashboard(deps) {
     const base = String(fileName).replace(/\.[^.]+$/, '');
     const text = `${base} ${caption || ''}`;
     const h = parseFileName(text + '.x');
-    const grade = h.grade >= 1 && h.grade <= 11 ? h.grade : null;
+    const grades = gradesOf(text, h);
+    const grade = grades[0] ?? null;
     let year = h.year && Number(h.year[1]) === Number(h.year[0]) + 1 ? `${h.year[0]}/${h.year[1]}` : null;
     let quarter = quarterOf(text, h);
     if (postedAt) {
@@ -131,7 +143,7 @@ export function createDashboard(deps) {
     const subject = pick(guessSubject(fileName, deps.keyOf)) ||
       (caption ? pick(guessSubject(caption + '.x', deps.keyOf)) : null);
     return {
-      grade, subject,
+      grade, grades, subject,
       grading: deps.guessGrading(text) === 'bsb' ? 'bsb' : null,
       year, quarter,
     };

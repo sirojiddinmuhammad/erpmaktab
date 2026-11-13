@@ -485,8 +485,21 @@ async function uploadFile(file) {
     body: file,
   });
 }
-const keyOf = r => [r.grade, r.subject, r.quarter, r.year, bf('medium').value, r.bsb ? 'bsb' : 'normal'].join('|');
-const complete = r => r.state === 'done' && r.grade && r.subject && r.quarter && r.year;
+// Bitta fayl bir nechta sinfga: har sinf alohida reja kaliti
+const keysOf = r => (r.grades || []).map(g => [g, r.subject, r.quarter, r.year, bf('medium').value, r.bsb ? 'bsb' : 'normal'].join('|'));
+const complete = r => r.state === 'done' && r.grades?.length && r.subject && r.quarter && r.year;
+// [1,2,3,4,7] -> "1–4, 7-sinf"
+function gradesLabel(gs) {
+  if (!gs?.length) return 'Sinf ▾';
+  const parts = [];
+  for (let i = 0; i < gs.length; i++) {
+    let j = i;
+    while (j + 1 < gs.length && gs[j + 1] === gs[j] + 1) j++;
+    parts.push(j > i ? `${gs[i]}–${gs[j]}` : String(gs[i]));
+    i = j;
+  }
+  return parts.join(', ') + '-sinf ▾';
+}
 
 function addFiles(list) {
   for (const file of list) {
@@ -501,7 +514,7 @@ function applyUpload(r, d) {
   const g = d.guess || {};
   Object.assign(r, {
     state: 'done', fileId: d.fileId, fileName: d.fileName, topics: d.topics,
-    grade: g.grade || null, subject: g.subject || null,
+    grades: g.grades?.length ? [...g.grades] : (g.grade ? [g.grade] : []), subject: g.subject || null,
     quarter: g.quarter || Number(bf('quarter').value),
     year: g.year || bf('year').value,
     bsb: g.grading ? g.grading === 'bsb' : bf('grading').value === 'bsb',
@@ -513,7 +526,7 @@ async function uploadRow(r) {
   try {
     applyUpload(r, await uploadFile(r.file));
     if (prefill) {
-      r.grade = prefill.grade; r.subject = prefill.subject; prefill = null;
+      r.grades = [prefill.grade]; r.subject = prefill.subject; prefill = null;
       $('#prefill-note').hidden = true;
     }
     checkExists(r);
@@ -523,14 +536,14 @@ async function uploadRow(r) {
   renderBulk();
 }
 async function checkExists(r) {
-  r.exists = null;
+  r.existing = null;
   if (!complete(r)) return;
-  const k = keyOf(r);
+  const sig = keysOf(r).join(',');
   try {
-    const d = await api('/api/plans/exists?' + new URLSearchParams({
-      grade: r.grade, subject: r.subject, quarter: r.quarter, year: r.year,
-      medium: bf('medium').value, grading: r.bsb ? 'bsb' : 'normal' }));
-    if (keyOf(r) === k) { r.exists = d.exists; renderBulk(); }
+    const found = await Promise.all(r.grades.map(grade => api('/api/plans/exists?' + new URLSearchParams({
+      grade, subject: r.subject, quarter: r.quarter, year: r.year,
+      medium: bf('medium').value, grading: r.bsb ? 'bsb' : 'normal' })).then(d => d.exists)));
+    if (keysOf(r).join(',') === sig) { r.existing = found.filter(Boolean).length; renderBulk(); }
   } catch { /* holat ko'rsatilmaydi */ }
 }
 function statusOf(r, dups) {
@@ -539,13 +552,16 @@ function statusOf(r, dups) {
   if (r.state === 'err') return { cls: 'st-bad', text: '❌ ' + r.error };
   if (r.saveError) return { cls: 'st-bad', text: '❌ ' + r.saveError };
   if (!complete(r)) return { cls: 'st-warn', text: '⚠️ Sinf yoki fan tanlanmagan' };
-  if (dups.has(keyOf(r))) return { cls: 'st-warn', text: '⚠️ Takror' };
-  if (r.exists) return { cls: '', text: '🔄 Almashtiradi' };
-  return { cls: '', text: '🆕 Yangi' };
+  if (keysOf(r).some(k => dups.has(k))) return { cls: 'st-warn', text: '⚠️ Takror' };
+  const n = r.grades.length, e = r.existing || 0;
+  if (n === 1) return { cls: '', text: e ? '🔄 Almashtiradi' : '🆕 Yangi' };
+  if (!e) return { cls: '', text: `🆕 ${n} ta yangi` };
+  if (e === n) return { cls: '', text: `🔄 ${n} tasi almashtiradi` };
+  return { cls: '', text: `🆕 ${n - e} ta yangi · 🔄 ${e} tasi almashtiradi` };
 }
 function duplicateKeys() {
   const seen = new Map();
-  for (const r of rows) if (complete(r)) seen.set(keyOf(r), (seen.get(keyOf(r)) || 0) + 1);
+  for (const r of rows) if (complete(r)) for (const k of keysOf(r)) seen.set(k, (seen.get(k) || 0) + 1);
   return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
 }
 function renderBulk() {
@@ -560,7 +576,7 @@ function renderBulk() {
       opts.map(o => `<option value="${esc(o.value)}" ${String(val ?? '') === String(o.value) ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
     return `<tr data-uid="${r.uid}" class="${st.cls}">
       <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name)}">${r.fromInbox ? '📥 ' : ''}${esc(r.name)}</td>
-      <td>${sel('grade', gradeOpts(), r.grade)}</td>
+      <td><button class="btn" type="button" data-act="grades" ${editable ? '' : 'disabled'} style="white-space:nowrap">${esc(gradesLabel(r.grades))}</button></td>
       <td>${sel('subject', sOpts, r.subject)}</td>
       <td>${sel('quarter', [1, 2, 3, 4].map(q => ({ value: String(q), label: String(q) })), r.quarter)}</td>
       <td>${sel('year', years.map(y => ({ value: y, label: y })), r.year)}</td>
@@ -570,7 +586,8 @@ function renderBulk() {
       <td class="actions">${r.state === 'err' && r.file ? '<button class="btn" data-act="retry">Qayta urinish</button>' : ''}<button class="btn" data-act="remove" title="Ro'yxatdan olib tashlash">✕</button></td>
     </tr>`;
   }).join('') : '<tr><td colspan="9" class="muted">Hali fayl yo\'q.</td></tr>';
-  const ready = rows.filter(r => complete(r) && !dups.has(keyOf(r))).length;
+  const ready = rows.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)))
+    .reduce((n, r) => n + r.grades.length, 0);
   const busy = rows.some(r => r.state === 'up');
   $('#b-save').textContent = `${ready} ta rejani saqlash`;
   $('#b-save').disabled = !ready || busy || sessionLost;
@@ -583,7 +600,7 @@ $('#bulk-body').addEventListener('change', e => {
   if (!r || !e.target.dataset.f) return;
   const f = e.target.dataset.f;
   if (f === 'bsb') r.bsb = e.target.checked;
-  else if (f === 'grade' || f === 'quarter') r[f] = e.target.value ? Number(e.target.value) : null;
+  else if (f === 'quarter') r[f] = e.target.value ? Number(e.target.value) : null;
   else r[f] = e.target.value || null;
   r.saveError = '';
   checkExists(r);
@@ -596,7 +613,52 @@ $('#bulk-body').addEventListener('click', e => {
   if (!r) return;
   if (b.dataset.act === 'remove') { rows = rows.filter(x => x !== r); renderBulk(); }
   if (b.dataset.act === 'retry') queue = queue.then(() => uploadRow(r));
+  if (b.dataset.act === 'grades') pickGrades(r);
 });
+
+// Sinflarni tanlash oynasi (bir nechta sinf)
+function pickGrades(r) {
+  const chosen = new Set(r.grades || []);
+  $('#dlg-title').textContent = `Sinflar · ${r.name}`;
+  const paint = () => {
+    $('#dlg-body').innerHTML = `
+      <p class="muted" style="margin:6px 0 10px">Bir xil reja bir nechta sinfga to'g'ri kelsa, hammasini belgilang — har biriga alohida saqlanadi.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px">${
+        Array.from({ length: 11 }, (_, i) => i + 1).map(g => `<label class="btn" style="display:flex;gap:6px;align-items:center;justify-content:center${chosen.has(g) ? ';border-color:var(--accent)' : ''}">
+          <input type="checkbox" data-g="${g}" ${chosen.has(g) ? 'checked' : ''}> ${g}</label>`).join('')}
+      </div>
+      <div class="row-actions" style="justify-content:flex-start">
+        <button class="btn" type="button" data-range="1-4">1–4</button>
+        <button class="btn" type="button" data-range="5-9">5–9</button>
+        <button class="btn" type="button" data-range="10-11">10–11</button>
+        <button class="btn" type="button" data-range="">Tozalash</button>
+      </div>
+      <div class="row-actions">
+        <button class="btn" type="button" data-close>Bekor</button>
+        <button class="btn primary" type="button" data-ok>Tayyor</button>
+      </div>`;
+    $$('#dlg-body [data-g]').forEach(c => c.addEventListener('change', () => {
+      const g = Number(c.dataset.g);
+      if (c.checked) chosen.add(g); else chosen.delete(g);
+      paint();
+    }));
+    $$('#dlg-body [data-range]').forEach(b => b.addEventListener('click', () => {
+      chosen.clear();
+      if (b.dataset.range) { const [lo, hi] = b.dataset.range.split('-').map(Number); for (let g = lo; g <= hi; g++) chosen.add(g); }
+      paint();
+    }));
+    $('#dlg-body [data-close]').addEventListener('click', () => $('#dlg').close());
+    $('#dlg-body [data-ok]').addEventListener('click', () => {
+      r.grades = [...chosen].sort((a, b) => a - b);
+      r.saveError = '';
+      $('#dlg').close();
+      checkExists(r);
+      renderBulk();
+    });
+  };
+  paint();
+  $('#dlg').showModal();
+}
 $('#bf').addEventListener('input', () => refreshBulk());
 $('#b-clear').addEventListener('click', () => {
   if (rows.length && !confirm("Ro'yxat tozalansinmi? Saqlanmagan qatorlar yo'qoladi.")) return;
@@ -605,20 +667,25 @@ $('#b-clear').addEventListener('click', () => {
 $('#b-save').addEventListener('click', async () => {
   const dups = duplicateKeys();
   const medium = bf('medium').value;
-  const ready = rows.filter(r => complete(r) && !dups.has(keyOf(r)));
+  const ready = rows.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)));
   if (!ready.length) return;
+  // har sinf alohida qator; qaysi qator qaysi faylniki — eslab qolamiz
+  const items = ready.flatMap(r => r.grades.map(grade => ({ r, grade })));
   $('#b-save').disabled = true;
   $('#bulk-msg').textContent = '⏳ Saqlanmoqda…';
   try {
-    const d = await postJson('/api/plans/batch', { rows: ready.map(r => ({
-      grade: r.grade, subject: r.subject, quarter: r.quarter, year: r.year, medium,
+    const d = await postJson('/api/plans/batch', { rows: items.map(({ r, grade }) => ({
+      grade, subject: r.subject, quarter: r.quarter, year: r.year, medium,
       grading: r.bsb ? 'bsb' : 'normal', fileId: r.fileId, fileName: r.fileName, topics: r.topics })) });
     const failed = new Map(d.skipped.map(s => [s.index, s.error]));
-    ready.forEach((r, i) => {
-      if (failed.has(i)) r.saveError = failed.get(i) === 'server' ? 'Saqlanmadi, qayta bosing' : failed.get(i);
+    // saqlanmagan sinflar qatorda qoladi, saqlanganlari olib tashlanadi
+    for (const r of ready) r.grades = [];
+    items.forEach(({ r, grade }, i) => {
+      if (!failed.has(i)) return;
+      r.grades.push(grade);
+      r.saveError = failed.get(i) === 'server' ? 'Saqlanmadi, qayta bosing' : failed.get(i);
     });
-    const saved = new Set(ready.filter((_, i) => !failed.has(i)));
-    rows = rows.filter(r => !saved.has(r));
+    rows = rows.filter(r => !ready.includes(r) || r.grades.length);
     $('#bulk-msg').textContent = `✅ Yangi: ${d.created} · Almashtirildi: ${d.replaced} · O'tkazildi: ${d.skipped.length}` +
       (d.skipped.length ? ` (${d.skipped.map(s => s.error).join(', ')})` : '');
   } catch (e) {

@@ -22,7 +22,7 @@ test('take: izoh va sanadan taxmin, qayta yuborilmaydi', async () => {
     const r = await post(p, cookie, '/api/inbox/take', { ids: [1] });
     assert.equal(r.status, 200);
     assert.deepEqual(await r.json(), { rows: [{ inboxId: 1, fileId: 'TG1', fileName: 'reja.xlsx', topics: 2,
-      guess: { grade: 6, subject: 'math', grading: null, year: '2026/2027', quarter: 2 } }] });
+      guess: { grade: 6, grades: [6], subject: 'math', grading: null, year: '2026/2027', quarter: 2 } }] });
     assert.equal(p.calls.sendDocument.length, 0);
     assert.deepEqual(p.calls.markInbox, [{ ids: [1], field: 'taken_at' }]);
   } finally { await p.close(); }
@@ -33,7 +33,7 @@ test('take: fayl nomidagi qiymat sanadan ustun', async () => {
   try {
     const cookie = await p.login();
     const b = await (await post(p, cookie, '/api/inbox/take', { ids: [1] })).json();
-    assert.deepEqual(b.rows[0].guess, { grade: 5, subject: null, grading: null, year: '2025/2026', quarter: 3 });
+    assert.deepEqual(b.rows[0].guess, { grade: 5, grades: [5], subject: null, grading: null, year: '2025/2026', quarter: 3 });
     assert.equal(b.rows[0].topics, null);
   } finally { await p.close(); }
 });

@@ -14,7 +14,7 @@ test('files: kirillcha nom, taxmin, vaqtinchalik fayl o\'chadi', async () => {
     const r = await post(p, cookie, '/api/files', Buffer.from('abc'), { 'x-file-name': encodeURIComponent(name), 'content-type': 'application/octet-stream' });
     assert.equal(r.status, 200);
     const b = await r.json();
-    assert.deepEqual(b, { fileId: 'FILE1', fileName: name, topics: 2, guess: { grade: 6, subject: 'russian', grading: null, year: '2026/2027', quarter: 2 } });
+    assert.deepEqual(b, { fileId: 'FILE1', fileName: name, topics: 2, guess: { grade: 6, grades: [6], subject: 'russian', grading: null, year: '2026/2027', quarter: 2 } });
     assert.deepEqual(p.calls.sendDocument, [{ size: 3, fileName: name }]);
     assert.deepEqual((await fs.readdir(p.tmp)).filter(f => f !== 'index.html'), []);
   } finally { await p.close(); }
@@ -84,5 +84,17 @@ test('replace, archive, origin, yomon JSON', async () => {
     const evil = await fetch(p.base + '/api/plans/7/archive', { method: 'POST', headers: { cookie, origin: 'https://evil.example' } });
     assert.equal(evil.status, 403);
     assert.deepEqual(p.calls.archive, [7]);
+  } finally { await p.close(); }
+});
+
+test('files: "1-4 sinf" oralig\'i — grades [1,2,3,4]', async () => {
+  const p = await startPanel();
+  try {
+    const cookie = await p.login();
+    for (const [name, grades] of [['1-4 sinf Tarbiya.xlsx', [1, 2, 3, 4]], ['5–6 кл Математика.xlsx', [5, 6]], ['7 sinf.xlsx', [7]], ['reja.xlsx', []], ['4-1 sinf.xlsx', [1]], ['1-12 sinf.xlsx', [12].filter(() => false)]]) {
+      const b = await (await post(p, cookie, '/api/files', Buffer.from('x'), { 'x-file-name': encodeURIComponent(name) })).json();
+      assert.deepEqual(b.guess.grades, grades, name);
+      assert.equal(b.guess.grade, grades[0] ?? null, name);
+    }
   } finally { await p.close(); }
 });
