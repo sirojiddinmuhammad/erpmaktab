@@ -91,6 +91,26 @@ function gradesOf(text, h) {
   return h.grade >= 1 && h.grade <= 11 ? [h.grade] : [];
 }
 
+// Ta'lim tili: 1) yordamchi so'zlar, 2) fan nomi qaysi tilda, 3) yozuv
+const UZ_MARK = /[ўқғҳ]|(^|[^a-z])(sinf|chorak)|(^|[^а-яё])(синф|чорак)/i;
+const RU_MARK = /(^|[^а-яё])(кл|класс[а-яё]*|четв[а-яё]*)([^а-яё]|$)/i;
+const norm = t => String(t || '').toLowerCase().replace(/[’`‘]/g, "'").replace(/\s+/g, ' ').trim();
+export function mediumOf(text, subject) {
+  const t = norm(text);
+  if (UZ_MARK.test(t)) return 'uz';
+  if (RU_MARK.test(t)) return 'ru';
+  if (subject) {
+    const uz = norm(subject.uz), ru = norm(subject.ru);
+    if (uz !== ru) {
+      if (ru.length >= 4 && t.includes(ru)) return 'ru';
+      if (uz.length >= 4 && t.includes(uz)) return 'uz';
+    }
+  }
+  if (/[а-яё]/.test(t)) return 'ru';
+  if (/[a-z]/.test(t)) return 'uz';
+  return null;
+}
+
 const html = (res, status, text) => {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(text);
@@ -142,8 +162,10 @@ export function createDashboard(deps) {
     const pick = k => (k && keys.has(k) ? k : null);
     const subject = pick(guessSubject(fileName, deps.keyOf)) ||
       (caption ? pick(guessSubject(caption + '.x', deps.keyOf)) : null);
+    const subj = subject ? deps.subjects().find(x => x.key === subject) : null;
     return {
       grade, grades, subject,
+      medium: mediumOf(text.replace(/\d+/g, ' '), subj),
       grading: deps.guessGrading(text) === 'bsb' ? 'bsb' : null,
       year, quarter,
     };

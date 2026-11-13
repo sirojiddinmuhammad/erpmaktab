@@ -14,7 +14,7 @@ test('files: kirillcha nom, taxmin, vaqtinchalik fayl o\'chadi', async () => {
     const r = await post(p, cookie, '/api/files', Buffer.from('abc'), { 'x-file-name': encodeURIComponent(name), 'content-type': 'application/octet-stream' });
     assert.equal(r.status, 200);
     const b = await r.json();
-    assert.deepEqual(b, { fileId: 'FILE1', fileName: name, topics: 2, guess: { grade: 6, grades: [6], subject: 'russian', grading: null, year: '2026/2027', quarter: 2 } });
+    assert.deepEqual(b, { fileId: 'FILE1', fileName: name, topics: 2, guess: { grade: 6, grades: [6], subject: 'russian', medium: 'ru', grading: null, year: '2026/2027', quarter: 2 } });
     assert.deepEqual(p.calls.sendDocument, [{ size: 3, fileName: name }]);
     assert.deepEqual((await fs.readdir(p.tmp)).filter(f => f !== 'index.html'), []);
   } finally { await p.close(); }
@@ -95,6 +95,27 @@ test('files: "1-4 sinf" oralig\'i — grades [1,2,3,4]', async () => {
       const b = await (await post(p, cookie, '/api/files', Buffer.from('x'), { 'x-file-name': encodeURIComponent(name) })).json();
       assert.deepEqual(b.guess.grades, grades, name);
       assert.equal(b.guess.grade, grades[0] ?? null, name);
+    }
+  } finally { await p.close(); }
+});
+
+test('files: til fayl nomidan aniqlanadi', async () => {
+  const p = await startPanel();
+  try {
+    const cookie = await p.login();
+    for (const [name, medium] of [
+      ['Математика 5 кл.xlsx', 'ru'],
+      ['Matematika 5 sinf.xlsx', 'uz'],
+      ['Математика 5 синф.xlsx', 'uz'],       // o'zbekcha kirill
+      ['Русский язык 6 класс 2 четверть.xlsx', 'ru'],
+      ['Rus tili 6 sinf.xlsx', 'uz'],
+      ['Ona tili.xlsx', 'uz'],
+      ['Литература.xlsx', 'ru'],
+      ['Ўқиш 2 синф.xlsx', 'uz'],
+      ['2026.xlsx', null],
+    ]) {
+      const b = await (await post(p, cookie, '/api/files', Buffer.from('x'), { 'x-file-name': encodeURIComponent(name) })).json();
+      assert.equal(b.guess.medium, medium, name);
     }
   } finally { await p.close(); }
 });

@@ -54,6 +54,8 @@ button.danger { color: var(--bad); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+th[data-sort] { cursor: pointer; user-select: none; }
+th[data-sort]:hover { color: var(--text); }
 td.num { font-variant-numeric: tabular-nums; text-align: right; }
 td.actions { white-space: nowrap; display: flex; gap: 6px; }
 .muted { color: var(--muted); }
@@ -155,7 +157,7 @@ nav button { white-space: nowrap; }
       <div class="filters" id="bf">
         <label class="f">Yil<select name="year"></select></label>
         <label class="f">Chorak<select name="quarter"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
-        <label class="f">Til<select name="medium"><option value="uz">O'zbek</option><option value="ru">Rus</option></select></label>
+        <label class="f">Til (aniqlanmasa)<select name="medium"><option value="uz">O'zbek</option><option value="ru">Rus</option></select></label>
         <label class="f">Baholash<select name="grading"><option value="normal">Oddiy</option><option value="bsb">BSB</option></select></label>
       </div>
       <p class="muted" id="prefill-note" style="margin:10px 0 0" hidden></p>
@@ -170,9 +172,23 @@ nav button { white-space: nowrap; }
       <input type="file" id="pick" multiple accept=".xls,.xlsx" hidden>
     </div>
     <div class="card">
+      <div class="filters" id="bv" style="margin-bottom:10px">
+        <label class="f">Til<select name="medium"><option value="">Hammasi</option><option value="uz">🇺🇿 O'zbek</option><option value="ru">🇷🇺 Rus</option></select></label>
+        <label class="f">Sinf<select name="grade"></select></label>
+        <label class="f">Fan<select name="subject"></select></label>
+        <label class="f">Holat<select name="status">
+          <option value="">Hammasi</option><option value="missing">⚠️ To'ldirilmagan</option><option value="dup">⚠️ Takror</option>
+          <option value="err">❌ Xato</option><option value="new">🆕 Yangi</option><option value="replace">🔄 Almashtiradi</option>
+        </select></label>
+        <span class="muted" id="bv-count" style="align-self:center"></span>
+        <button class="btn" type="button" id="bv-clear" hidden>Filtrni tozalash</button>
+      </div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Fayl</th><th>Sinf</th><th>Fan</th><th>Chorak</th><th>Yil</th><th>BSB</th><th class="num">Mavzular</th><th>Holat</th><th></th></tr></thead>
+          <thead><tr>
+            <th data-sort="name">Fayl</th><th data-sort="grade">Sinf</th><th data-sort="medium">Til</th><th data-sort="subject">Fan</th>
+            <th data-sort="quarter">Chorak</th><th>Yil</th><th>BSB</th><th class="num">Mavzular</th><th data-sort="status">Holat</th><th></th>
+          </tr></thead>
           <tbody id="bulk-body"></tbody>
         </table>
       </div>
@@ -457,7 +473,7 @@ $('#cov').addEventListener('click', e => {
   const b = e.target.closest('.cell-missing');
   if (!b) return;
   for (const k of ['year', 'quarter', 'medium', 'grading']) bf(k).value = cf(k).value;
-  prefill = { grade: Number(b.dataset.g), subject: b.dataset.s };
+  prefill = { grade: Number(b.dataset.g), subject: b.dataset.s, medium: cf('medium').value };
   const note = $('#prefill-note');
   note.hidden = false;
   note.textContent = `Keyingi faylga oldindan qo'yiladi: ${prefill.grade}-sinf · ${subjName(prefill.subject, bf('medium').value)}`;
@@ -486,8 +502,8 @@ async function uploadFile(file) {
   });
 }
 // Bitta fayl bir nechta sinfga: har sinf alohida reja kaliti
-const keysOf = r => (r.grades || []).map(g => [g, r.subject, r.quarter, r.year, bf('medium').value, r.bsb ? 'bsb' : 'normal'].join('|'));
-const complete = r => r.state === 'done' && r.grades?.length && r.subject && r.quarter && r.year;
+const keysOf = r => (r.grades || []).map(g => [g, r.subject, r.quarter, r.year, r.medium, r.bsb ? 'bsb' : 'normal'].join('|'));
+const complete = r => r.state === 'done' && r.grades?.length && r.subject && r.quarter && r.year && r.medium;
 // [1,2,3,4,7] -> "1–4, 7-sinf"
 function gradesLabel(gs) {
   if (!gs?.length) return 'Sinf ▾';
@@ -515,6 +531,7 @@ function applyUpload(r, d) {
   Object.assign(r, {
     state: 'done', fileId: d.fileId, fileName: d.fileName, topics: d.topics,
     grades: g.grades?.length ? [...g.grades] : (g.grade ? [g.grade] : []), subject: g.subject || null,
+    medium: g.medium || bf('medium').value,
     quarter: g.quarter || Number(bf('quarter').value),
     year: g.year || bf('year').value,
     bsb: g.grading ? g.grading === 'bsb' : bf('grading').value === 'bsb',
@@ -526,7 +543,7 @@ async function uploadRow(r) {
   try {
     applyUpload(r, await uploadFile(r.file));
     if (prefill) {
-      r.grades = [prefill.grade]; r.subject = prefill.subject; prefill = null;
+      r.grades = [prefill.grade]; r.subject = prefill.subject; r.medium = prefill.medium; prefill = null;
       $('#prefill-note').hidden = true;
     }
     checkExists(r);
@@ -542,34 +559,89 @@ async function checkExists(r) {
   try {
     const found = await Promise.all(r.grades.map(grade => api('/api/plans/exists?' + new URLSearchParams({
       grade, subject: r.subject, quarter: r.quarter, year: r.year,
-      medium: bf('medium').value, grading: r.bsb ? 'bsb' : 'normal' })).then(d => d.exists)));
+      medium: r.medium, grading: r.bsb ? 'bsb' : 'normal' })).then(d => d.exists)));
     if (keysOf(r).join(',') === sig) { r.existing = found.filter(Boolean).length; renderBulk(); }
   } catch { /* holat ko'rsatilmaydi */ }
 }
 function statusOf(r, dups) {
-  if (r.state === 'rejected') return { cls: 'st-bad', text: '❌ ' + r.error };
-  if (r.state === 'up') return { cls: '', text: '⏳ Yuklanmoqda' };
-  if (r.state === 'err') return { cls: 'st-bad', text: '❌ ' + r.error };
-  if (r.saveError) return { cls: 'st-bad', text: '❌ ' + r.saveError };
-  if (!complete(r)) return { cls: 'st-warn', text: '⚠️ Sinf yoki fan tanlanmagan' };
-  if (keysOf(r).some(k => dups.has(k))) return { cls: 'st-warn', text: '⚠️ Takror' };
+  if (r.state === 'rejected') return { kind: 'err', cls: 'st-bad', text: '❌ ' + r.error };
+  if (r.state === 'up') return { kind: 'up', cls: '', text: '⏳ Yuklanmoqda' };
+  if (r.state === 'err') return { kind: 'err', cls: 'st-bad', text: '❌ ' + r.error };
+  if (r.saveError) return { kind: 'err', cls: 'st-bad', text: '❌ ' + r.saveError };
+  if (!complete(r)) return { kind: 'missing', cls: 'st-warn', text: '⚠️ Sinf yoki fan tanlanmagan' };
+  if (keysOf(r).some(k => dups.has(k))) return { kind: 'dup', cls: 'st-warn', text: '⚠️ Takror' };
   const n = r.grades.length, e = r.existing || 0;
-  if (n === 1) return { cls: '', text: e ? '🔄 Almashtiradi' : '🆕 Yangi' };
-  if (!e) return { cls: '', text: `🆕 ${n} ta yangi` };
-  if (e === n) return { cls: '', text: `🔄 ${n} tasi almashtiradi` };
-  return { cls: '', text: `🆕 ${n - e} ta yangi · 🔄 ${e} tasi almashtiradi` };
+  if (n === 1) return e ? { kind: 'replace', cls: '', text: '🔄 Almashtiradi' } : { kind: 'new', cls: '', text: '🆕 Yangi' };
+  if (!e) return { kind: 'new', cls: '', text: `🆕 ${n} ta yangi` };
+  if (e === n) return { kind: 'replace', cls: '', text: `🔄 ${n} tasi almashtiradi` };
+  return { kind: 'replace', cls: '', text: `🆕 ${n - e} ta yangi · 🔄 ${e} tasi almashtiradi` };
+}
+
+// ---- jadval ko'rinishi: filtrlar va tartiblash ----
+const view = { sort: null, dir: 1 };
+const bv = name => $(`#bv [name=${name}]`);
+const viewFilter = () => ({ medium: bv('medium').value, grade: bv('grade').value, subject: bv('subject').value, status: bv('status').value });
+const filterActive = () => Object.values(viewFilter()).some(Boolean);
+const STATUS_ORDER = { err: 0, missing: 1, dup: 2, up: 3, replace: 4, new: 5 };
+function visibleRows(dups) {
+  const f = viewFilter();
+  const out = rows.filter(r => {
+    if (f.medium && r.medium !== f.medium) return false;
+    if (f.grade && !(r.grades || []).includes(Number(f.grade))) return false;
+    if (f.subject && r.subject !== f.subject) return false;
+    if (f.status && statusOf(r, dups).kind !== f.status) return false;
+    return true;
+  });
+  if (!view.sort) return out;
+  const val = r => {
+    switch (view.sort) {
+      case 'name': return r.name.toLowerCase();
+      case 'grade': return r.grades?.[0] ?? 99;
+      case 'medium': return r.medium || 'zz';
+      case 'subject': return r.subject ? subjName(r.subject, r.medium).toLowerCase() : '\uffff';
+      case 'quarter': return r.quarter ?? 9;
+      case 'status': return STATUS_ORDER[statusOf(r, dups).kind];
+    }
+  };
+  return out.map((r, i) => [r, i]).sort(([a, i], [b, j]) => {
+    const x = val(a), y = val(b);
+    return (x < y ? -1 : x > y ? 1 : i - j) * view.dir;
+  }).map(([r]) => r);
+}
+function renderViewBar() {
+  const keep = (sel, opts) => {
+    const v = sel.value;
+    fillSelect(sel, [{ value: '', label: 'Hammasi' }, ...opts]);
+    sel.value = opts.some(o => o.value === v) ? v : '';
+  };
+  const gs = [...new Set(rows.flatMap(r => r.grades || []))].sort((a, b) => a - b);
+  keep(bv('grade'), gs.map(g => ({ value: String(g), label: `${g}-sinf` })));
+  const ss = [...new Set(rows.map(r => r.subject).filter(Boolean))];
+  keep(bv('subject'), ss.map(k => ({ value: k, label: subjName(k, rows.find(r => r.subject === k)?.medium) }))
+    .sort((a, b) => a.label.localeCompare(b.label)));
+  $$('#tab-bulk th[data-sort]').forEach(th => {
+    th.textContent = th.textContent.replace(/ [▲▼]$/, '') + (view.sort === th.dataset.sort ? (view.dir > 0 ? ' ▲' : ' ▼') : '');
+  });
+  $('#bv-clear').hidden = !filterActive();
 }
 function duplicateKeys() {
   const seen = new Map();
   for (const r of rows) if (complete(r)) for (const k of keysOf(r)) seen.set(k, (seen.get(k) || 0) + 1);
   return new Set([...seen].filter(([, n]) => n > 1).map(([k]) => k));
 }
+// Saqlashga tayyor qatorlar; filtr yoqilgan bo'lsa — faqat ko'rinayotganlari
+function readyRows(dups) {
+  const pool = filterActive() ? visibleRows(dups) : rows;
+  return pool.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)));
+}
 function renderBulk() {
-  const medium = bf('medium').value;
   const dups = duplicateKeys();
   const years = yearOptions(rows.map(r => r.year));
-  const sOpts = subjectOpts(medium);
-  $('#bulk-body').innerHTML = rows.length ? rows.map(r => {
+  const sOpts = { uz: subjectOpts('uz'), ru: subjectOpts('ru') };
+  renderViewBar();
+  const shown = visibleRows(dups);
+  $('#bv-count').textContent = filterActive() ? `${shown.length} / ${rows.length} ta ko'rsatilmoqda` : (rows.length ? `${rows.length} ta fayl` : '');
+  $('#bulk-body').innerHTML = shown.length ? shown.map(r => {
     const st = statusOf(r, dups);
     const editable = r.state === 'done';
     const sel = (field, opts, val) => `<select data-f="${field}" ${editable ? '' : 'disabled'}><option value="">—</option>${
@@ -577,7 +649,8 @@ function renderBulk() {
     return `<tr data-uid="${r.uid}" class="${st.cls}">
       <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.name)}">${r.fromInbox ? '📥 ' : ''}${esc(r.name)}</td>
       <td><button class="btn" type="button" data-act="grades" ${editable ? '' : 'disabled'} style="white-space:nowrap">${esc(gradesLabel(r.grades))}</button></td>
-      <td>${sel('subject', sOpts, r.subject)}</td>
+      <td>${sel('medium', [{ value: 'uz', label: '🇺🇿 uz' }, { value: 'ru', label: '🇷🇺 ru' }], r.medium)}</td>
+      <td>${sel('subject', sOpts[r.medium] || sOpts.uz, r.subject)}</td>
       <td>${sel('quarter', [1, 2, 3, 4].map(q => ({ value: String(q), label: String(q) })), r.quarter)}</td>
       <td>${sel('year', years.map(y => ({ value: y, label: y })), r.year)}</td>
       <td><input type="checkbox" data-f="bsb" ${r.bsb ? 'checked' : ''} ${editable ? '' : 'disabled'}></td>
@@ -585,11 +658,10 @@ function renderBulk() {
       <td class="status">${esc(st.text)}</td>
       <td class="actions">${r.state === 'err' && r.file ? '<button class="btn" data-act="retry">Qayta urinish</button>' : ''}<button class="btn" data-act="remove" title="Ro'yxatdan olib tashlash">✕</button></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="9" class="muted">Hali fayl yo\'q.</td></tr>';
-  const ready = rows.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)))
-    .reduce((n, r) => n + r.grades.length, 0);
+  }).join('') : `<tr><td colspan="10" class="muted">${rows.length ? 'Filtrga mos fayl yo\'q.' : 'Hali fayl yo\'q.'}</td></tr>`;
+  const ready = readyRows(dups).reduce((n, r) => n + r.grades.length, 0);
   const busy = rows.some(r => r.state === 'up');
-  $('#b-save').textContent = `${ready} ta rejani saqlash`;
+  $('#b-save').textContent = filterActive() ? `Ko'rinayotgan ${ready} ta rejani saqlash` : `${ready} ta rejani saqlash`;
   $('#b-save').disabled = !ready || busy || sessionLost;
 }
 function refreshBulk() { rows.forEach(r => checkExists(r)); renderBulk(); }
@@ -660,14 +732,23 @@ function pickGrades(r) {
   $('#dlg').showModal();
 }
 $('#bf').addEventListener('input', () => refreshBulk());
+$('#bv').addEventListener('input', () => renderBulk());
+$('#bv-clear').addEventListener('click', () => {
+  for (const n of ['medium', 'grade', 'subject', 'status']) bv(n).value = '';
+  renderBulk();
+});
+$$('#tab-bulk th[data-sort]').forEach(th => th.addEventListener('click', () => {
+  if (view.sort === th.dataset.sort) view.dir = -view.dir;
+  else { view.sort = th.dataset.sort; view.dir = 1; }
+  renderBulk();
+}));
 $('#b-clear').addEventListener('click', () => {
   if (rows.length && !confirm("Ro'yxat tozalansinmi? Saqlanmagan qatorlar yo'qoladi.")) return;
   rows = []; $('#bulk-msg').textContent = ''; renderBulk();
 });
 $('#b-save').addEventListener('click', async () => {
   const dups = duplicateKeys();
-  const medium = bf('medium').value;
-  const ready = rows.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)));
+  const ready = readyRows(dups);
   if (!ready.length) return;
   // har sinf alohida qator; qaysi qator qaysi faylniki — eslab qolamiz
   const items = ready.flatMap(r => r.grades.map(grade => ({ r, grade })));
@@ -675,7 +756,7 @@ $('#b-save').addEventListener('click', async () => {
   $('#bulk-msg').textContent = '⏳ Saqlanmoqda…';
   try {
     const d = await postJson('/api/plans/batch', { rows: items.map(({ r, grade }) => ({
-      grade, subject: r.subject, quarter: r.quarter, year: r.year, medium,
+      grade, subject: r.subject, quarter: r.quarter, year: r.year, medium: r.medium,
       grading: r.bsb ? 'bsb' : 'normal', fileId: r.fileId, fileName: r.fileName, topics: r.topics })) });
     const failed = new Map(d.skipped.map(s => [s.index, s.error]));
     // saqlanmagan sinflar qatorda qoladi, saqlanganlari olib tashlanadi
