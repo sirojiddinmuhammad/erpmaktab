@@ -60,13 +60,16 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
     } catch (e) { throw fail('MAINTENANCE', `network ${e?.name || 'error'}`); }
     keep(r, url);
     if (r.status >= 300 && r.status < 400) {
+      // login.emaktab.uz orqali "aylanib qaytish" — brauzerdek kuzatamiz (u yerdagi cookie bilan
+      // eMaktab sessiyani jimgina yangilaydi). Faqat login sahifasida to'xtasak — sessiya tugagan.
       const loc = r.headers.get('location') || '';
-      if (isLoginPage(r.status, loc, '')) throw fail('SESSION_EXPIRED');
-      if (!loc || hops > 4) throw fail('EMAKTAB_UNEXPECTED', `redirect ${r.status}`);
+      if (!loc) throw fail('EMAKTAB_UNEXPECTED', `redirect ${r.status}`);
+      if (hops >= 6) throw fail(/login\.emaktab\.uz/i.test(loc) ? 'SESSION_EXPIRED' : 'EMAKTAB_UNEXPECTED', `redirect loop ${r.status}`);
       return request(new URL(loc, url).href, { method: 'GET' }, hops + 1);
     }
     const html = await r.text();
     lastUrl = url;
+    if (new URL(url).hostname === 'login.emaktab.uz') throw fail('SESSION_EXPIRED', new URL(url).pathname);
     if ([500, 502, 503, 504].includes(r.status) || isMaintenance(html)) throw fail('MAINTENANCE');
     if (isLoginPage(r.status, null, html)) throw fail('SESSION_EXPIRED');
     if (!r.ok) throw fail('EMAKTAB_UNEXPECTED', `${r.status} ${pageText(html)}`);

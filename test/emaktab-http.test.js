@@ -25,6 +25,7 @@ function fakeEmaktab({ step3 = 'import-step3-ready.html', final = '<html><body>�
     calls.push({ url: String(url), method: opts.method || 'GET', headers: opts.headers || {}, body: form, signal: opts.signal });
     if (first && calls.length === 1) return first();
     const u = String(url);
+    if (u.includes('login.emaktab.uz')) return new Response('<form action="https://login.emaktab.uz/login"><input name="login"><input type="password" name="password"></form>');
     if (u.includes('/v2/myclasses')) return new Response(fx('myclasses.html'));
     if (u.includes('getsubgroups-cmd')) return new Response(fx('getsubgroups.json'));
     if (u.includes('getperiods-cmd')) return new Response(fx('getperiods.json'));
@@ -207,4 +208,30 @@ test('FIX8: a set-cookie with Max-Age=0 removes the cookie', async () => {
   const em = createEmaktabHttp({ fetch, cookies });
   await em.listClassSubjects();
   await em.listClassSubjects();
+});
+
+test('a silent bounce through login.emaktab.uz with a valid login cookie is followed', async () => {
+  const seen = [];
+  const fetch = async (url, opts = {}) => {
+    const u = new URL(url);
+    seen.push([u.hostname, opts.headers.cookie]);
+    if (u.hostname === 'schools.emaktab.uz' && !u.searchParams.has('ticket') && seen.length === 1)
+      return new Response('', { status: 302, headers: { location: 'https://login.emaktab.uz/?ReturnUrl=%2Fv2%2Fmyclasses' } });
+    if (u.hostname === 'login.emaktab.uz')
+      return new Response('', { status: 302, headers: { location: 'https://schools.emaktab.uz/v2/myclasses?ticket=t1', 'set-cookie': 'sess=new; Path=/; Domain=schools.emaktab.uz' } });
+    return new Response(fx('myclasses.html'));
+  };
+  const em = createEmaktabHttp({ fetch, cookies: [{ name: 'auth', value: 'a1', domain: '.emaktab.uz', path: '/' }] });
+  const r = await em.listClassSubjects();
+  assert.equal(r.classes.length, 3);
+  assert.equal(seen[1][0], 'login.emaktab.uz');
+  assert.match(seen[1][1], /auth=a1/);
+  assert.match(seen[2][1], /sess=new/);
+});
+
+test('ending on a login.emaktab.uz page (login form or 2FA) is SESSION_EXPIRED', async () => {
+  const fetch = async url => (new URL(url).hostname === 'login.emaktab.uz'
+    ? new Response('<html><body>eMaktab | Подтверждение входа</body></html>')
+    : new Response('', { status: 302, headers: { location: 'https://login.emaktab.uz/login/2fa-verification?key=x' } }));
+  await assert.rejects(createEmaktabHttp({ fetch, cookies }).listClassSubjects(), e => e.code === 'SESSION_EXPIRED');
 });

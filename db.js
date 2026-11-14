@@ -296,6 +296,15 @@ export async function saveState(tgId, state) {
     [tgId, JSON.stringify(state)]);
 }
 
+// Avtomatik import uchun: yoshidan qat'i nazar (eskirganini eMaktab o'zi aytadi).
+// Har yangi login eMaktab'da "yangi qurilma" tasdig'ini so'raydi — saqlanganini iloji boricha ishlatamiz.
+export async function getStateAny(tgId) {
+  const { rows } = await pool.query(
+    `select a.storage_state from users u join accounts a on a.id = u.account_id
+      where u.tg_id = $1`, [tgId]);
+  return rows[0]?.storage_state ?? null;
+}
+
 export async function getState(tgId) {
   const { rows } = await pool.query(
     `select a.storage_state from users u join accounts a on a.id = u.account_id
