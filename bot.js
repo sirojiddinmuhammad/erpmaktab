@@ -15,6 +15,7 @@ import * as db from './db.js';
 import * as admin from './admin.js';
 import { createLifecycle } from './lifecycle.js';
 import { createDashboard } from './dashboard/server.js';
+import { createDrive, parseKey } from './dashboard/drive.js';
 import { withRetry } from './dashboard/telegram.js';
 import { inboxDecision, createInboxNotifier } from './dashboard/inbox.js';
 
@@ -1216,6 +1217,26 @@ const liveSubjectKeys = () => new Set(admin.allSubjects().map(s => s.key));
 // Admin uchun joriy filtr (bitta admin bo'lgani uchun yagona obyekt yetarli)
 const planFilter = {};
 
+// Google Drive (ixtiyoriy): GOOGLE_SA_KEY bo'lsa reja fayllari Drive'dan o'qiladi
+const drive = (() => {
+  if (!process.env.GOOGLE_SA_KEY) return null;
+  const key = parseKey(process.env.GOOGLE_SA_KEY);
+  if (!key) { console.error("[drive] GOOGLE_SA_KEY o'qilmadi"); return null; }
+  return createDrive({ key });
+})();
+
+// Reja fayli: 'drive:<id>' — Google Drive'dan, aks holda Telegram'dan
+async function fetchPlanFile(fileId) {
+  if (String(fileId).startsWith('drive:')) {
+    if (!drive) throw Object.assign(new Error('Drive ulanmagan'), { code: 'DRIVE_FAIL' });
+    return drive.download(String(fileId).slice(6));
+  }
+  const f = await bot.api.getFile(fileId);
+  const r = await fetch(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`);
+  if (!r.ok) throw new Error(`Telegram file ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
+}
+
 // Rejalar bazasi dashboardi (faqat admin, faqat Railway'da)
 const dash = createDashboard({
   db,
@@ -1231,12 +1252,8 @@ const dash = createDashboard({
       { disable_notification: true }));
     return msg.document.file_id;
   },
-  downloadFile: async fileId => {
-    const f = await bot.api.getFile(fileId);
-    const r = await fetch(`https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${f.file_path}`);
-    if (!r.ok) throw new Error(`Telegram file ${r.status}`);
-    return Buffer.from(await r.arrayBuffer());
-  },
+  downloadFile: fetchPlanFile,
+  drive,
   publicOrigin: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`,
   htmlPath: path.join(path.dirname(fileURLToPath(import.meta.url)), 'dashboard', 'index.html'),
   tmpDir: TMP,
@@ -1512,6 +1529,15 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
   if (cmd === 'pf') {   // faylni yuborish
     const p = await db.getPlan(Number(parts[1]));
     if (!p) return ctx.reply('Reja topilmadi.');
+    if (String(p.file_id).startsWith('drive:')) {
+      try {
+        const buf = await fetchPlanFile(p.file_id);
+        return ctx.replyWithDocument(new InputFile(buf, p.file_name || 'reja.xlsx'), { caption: p.file_name || '' });
+      } catch (e) {
+        console.error('[drive] pf', e?.code || e?.message);
+        return ctx.reply("Fayl Drive'da topilmadi (o'chirilgan yoki ulashish bekor qilingan).");
+      }
+    }
     return ctx.replyWithDocument(p.file_id, { caption: p.file_name || '' });
   }
 
