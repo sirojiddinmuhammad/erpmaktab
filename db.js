@@ -675,6 +675,60 @@ export async function getInbox(ids) {
   return rows.map(r => ({ ...r, id: Number(r.id) }));
 }
 
+// Ko'p yozuvni bir so'rovda; takror — barcha holatlar bo'yicha (Drive uchun)
+export async function addInboxMany(recs) {
+  if (!recs.length) return 0;
+  const col = f => recs.map(f);
+  const r = await pool.query(
+    `insert into plan_inbox (file_id, file_unique_id, file_name, file_size, caption, source, posted_at)
+     select x.f, x.u, x.n, x.s, x.c, x.src, x.p
+       from unnest($1::text[], $2::text[], $3::text[], $4::int[], $5::text[], $6::text[], $7::timestamptz[])
+            as x(f, u, n, s, c, src, p)
+      where not exists (select 1 from plan_inbox i where i.file_unique_id = x.u)`,
+    [col(x => x.fileId), col(x => x.fileUniqueId), col(x => x.fileName), col(x => x.fileSize ?? null),
+     col(x => x.caption ?? null), col(x => x.source ?? null), col(x => x.postedAt ?? null)]);
+  return r.rowCount;
+}
+
+// Drive fayl id'laridan qaysilari rejalarda yoki inbox'da allaqachon bor
+export async function knownDriveIds(ids) {
+  if (!ids.length) return new Set();
+  const keys = ids.map(i => 'drive:' + i);
+  const { rows } = await pool.query(
+    `select file_id as k from plans where file_id = any($1::text[])
+      union
+     select file_unique_id from plan_inbox where file_unique_id = any($1::text[])`, [keys]);
+  return new Set(rows.map(r => r.k.slice(6)));
+}
+
+// Ko'p kalit bo'yicha mavjud (arxivlanmagan) rejalar — indekslar
+export async function existsMany(keys) {
+  if (!keys.length) return [];
+  const col = f => keys.map(f);
+  const { rows } = await pool.query(
+    `select distinct k.i - 1 as i
+       from unnest($1::int[], $2::text[], $3::int[], $4::text[], $5::text[], $6::text[])
+            with ordinality as k(g, s, q, y, m, gr, i)
+       join plans p on p.grade = k.g and p.subject_key = k.s and p.quarter = k.q
+                   and p.year = k.y and p.medium = k.m and p.grading = k.gr
+                   and p.archived_at is null
+      order by 1`,
+    [col(k => k.grade), col(k => k.subjectKey), col(k => k.quarter), col(k => k.year),
+     col(k => k.medium), col(k => k.grading || 'normal')]);
+  return rows.map(r => Number(r.i));
+}
+
+export async function getMeta(key) {
+  const { rows } = await pool.query('select value from meta where key = $1', [key]);
+  return rows[0]?.value ?? null;
+}
+
+export async function setMeta(key, value) {
+  await pool.query(
+    'insert into meta (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value',
+    [key, value]);
+}
+
 export async function countInbox() {
   const { rows } = await pool.query(`select count(*)::int as n from plan_inbox where ${PENDING}`);
   return rows[0].n;
