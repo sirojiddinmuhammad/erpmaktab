@@ -21,7 +21,8 @@ function setup(over = {}) {
   const prefs = { grading: 'normal', medium: 'uz', ...(over.prefs || {}) };
   const db = {
     getCreds: async id => (over.noCreds ? null : { username: 'u', password: 'p' }),
-    getState: async () => (over.noState ? null : { cookies: [{ name: 'a', value: '1', domain: '.emaktab.uz', path: '/' }] }),
+    getState: async () => null,   // 12 soatlik cheklovli o'qish — avtomatik import ishlatmaydi
+    getStateAny: async () => (over.noState ? null : { cookies: [{ name: 'a', value: '1', domain: '.emaktab.uz', path: '/' }] }),
     saveState: async () => {},
     getAutoPrefs: async () => ({ ...prefs }),
     setAutoGrading: async (id, v) => { prefs.grading = v; calls.prefs.push(['grading', v]); },
@@ -387,4 +388,10 @@ test('progress: a queued run says it is waiting', async () => {
   assert.ok(c.replies[0].text.includes(t('uz', 'auto_prog_queue')), c.replies[0].text);
   release(); await tick(10);
   release(); await tick(10);
+});
+
+test('saved eMaktab cookies are reused regardless of age (no new login, no 2FA)', async () => {
+  const s = setup();
+  await s.flow.command(ctxFor(TESTER));
+  assert.equal(s.calls.logins, 0);
 });

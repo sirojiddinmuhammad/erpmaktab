@@ -32,10 +32,13 @@ export function createAutoFlow(deps) {
       const http = createHttp({ cookies });
       return { http, list: await http.listClassSubjects(), cookies };
     };
-    const saved = cookiesFromState(await db.getState(id));
+    const saved = cookiesFromState(await db.getStateAny(id));
     if (saved.length) {
       try { return await tryList(saved); }
-      catch (e) { if (e.code !== 'SESSION_EXPIRED') throw e; }
+      catch (e) {
+        if (e.code !== 'SESSION_EXPIRED') throw e;
+        log('[auto] saved session rejected', id, e.message);
+      }
     }
     let state;
     try { state = await login(creds); }
