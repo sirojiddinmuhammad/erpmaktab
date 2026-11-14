@@ -147,6 +147,8 @@ export function previewFromHtml(html) {
       hw: pick(col.hw),
       rowId: rid ? rid[1] : null,
       ok: !!rid && !isError,
+      // darsda mavzu allaqachon bor (eMaktab ogohlantirishi, 2026-11-14 da ko'rilgan)
+      replaces: /тема\s+урока\s+заменит\s+текущую/i.test(status),
       status,
     });
   }

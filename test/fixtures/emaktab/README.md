@@ -39,6 +39,11 @@ token `XXX`. Mavzular — "Test mavzu N". Import (`step3`) **yuborilmagan**.
    oddiy `GET /v2/journals/planning/import?group=…` (1-qadam qaytadi). Osilib qolgan import yo'q.
 8. **Sessiyasiz** `GET /v2/journals/planning/import` → login'ga redirect (302).
 
+9. **Mavjud mavzu** (2026-11-14, 4-A Воспитание, 7 ta mavzusi bor): tayyor qator holati
+   `<ul class="alerts"><li>Импортируемая тема урока заменит текущую.</li><li>Импортируемое ДЗ
+   заменит текущее ДЗ в планировании.</li></ul>`; qator baribir import qilinadi (`<rowId>=1`).
+   Mavzusiz dars: `<ul class="s2 green strong"><li>Готов к импорту.</li></ul>`.
+
 ## Hali noma'lum
 
 - `step3` dan keyingi natija sahifasi (birinchi haqiqiy importda yoziladi).

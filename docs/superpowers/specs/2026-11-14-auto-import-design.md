@@ -236,3 +236,27 @@ Birinchi import tekshirilgach admin uni oshiradi (masalan 50).
 - Matnlar `i18n.js` da uz/ru.
 - Ko'rib chiqish xabari uzun bo'lsa bo'laklarga bo'lish (hozirgi `sendChunks`).
 - Muvaffaqiyatni tekshirish usuli (6-bo'lim, 7-qadam) 0-qadamdagi haqiqiy sahifaga qarab tanlanadi.
+
+## 13. 2-iteratsiya (2026-11-14, admin qarori): avval tekshiruv, bittadan hal qilish, bitta import
+
+Birinchi haqiqiy sinovdan keyin (10 ta sinf × fanda xato qatorlar bir paytda, mavzular
+ro'yxatisiz chiqdi) oqim o'zgaradi:
+
+1. **Tekshiruv.** `/auto` → har rejali sinf × fan eMaktab'ga yuklanib, faqat ko'rib chiqish
+   jadvali o'qiladi (`importOne({ checkOnly: true })`, `step3` yuborilmaydi). Jonli xabar
+   "⏳ Tekshirilmoqda… 5/19". Natija elementda: `total`, `ok`, `bad`, `existing`, `rows`.
+2. **Mavjud mavzular.** Holatida "Импортируемая тема урока заменит текущую" bo'lgan qatorlar
+   (`<ul class="alerts">`, 2026-11-14 da 4-A Воспитание'da ko'rilgan) — `existing`. `existing > 0`
+   bo'lsa element **belgilanmaydi**, ro'yxatda "📝 mavzular bor (7/7)" yoki "qisman bor (3/6)".
+   O'qituvchi Tanlov bilan belgilashi mumkin. (O'zbekcha interfeys matni hali ko'rilmagan.)
+3. **Ro'yxat:** ✅ tayyor (N/N) · ⚠️ N mavzu, M dars · 📝 mavzular bor · ❌ sabab.
+   Tugmalar: Davom etish / Chorak / Guruh / Tanlov / Bekor. Chorak yoki guruh o'zgarsa —
+   qayta tekshiriladi.
+4. **Bittadan hal qilish.** Belgilangan ⚠️ elementlar navbat bilan, mavzular ro'yxati bilan
+   (xato qatorlar ⚠️ va sababi): Birlashtirish / Ortiqchasiz / O'tkazib yuborish. Birlashtirilgan
+   fayl qayta **tekshiriladi**; xato qolsa — o'sha element yana. Ortiqchasiz va O'tkazib yuborish —
+   faqat qaror, darhol keyingisi.
+5. **Xulosa va import.** "N ta import qilinadi, K tasi o'tkazib yuborildi, E tasida mavzular
+   almashtiriladi" → **Tasdiqlash** → bitta jonli jarayon xabari bilan import (tekshiruvdagi
+   fayllar qayta ishlatiladi). Import paytida yana xato chiqsa (eMaktab o'zgargan) — ❌ va
+   "qayta /auto".

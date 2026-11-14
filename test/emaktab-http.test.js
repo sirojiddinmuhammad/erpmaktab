@@ -235,3 +235,19 @@ test('ending on a login.emaktab.uz page (login form or 2FA) is SESSION_EXPIRED',
     : new Response('', { status: 302, headers: { location: 'https://login.emaktab.uz/login/2fa-verification?key=x' } }));
   await assert.rejects(createEmaktabHttp({ fetch, cookies }).listClassSubjects(), e => e.code === 'SESSION_EXPIRED');
 });
+
+test('checkOnly stops before step 3 and returns counts', async () => {
+  const fe = fakeEmaktab({ step3: 'import-step3-errors.html' });
+  const r = await createEmaktabHttp({ cookies, fetch: fe.fetch }).importOne(await job({ checkOnly: true }));
+  assert.equal(r.state, 'checked');
+  assert.deepEqual({ total: r.total, ok: r.ok, bad: r.bad, existing: r.existing }, { total: 10, ok: 6, bad: 4, existing: 0 });
+  assert.equal(fe.calls.some(c => c.body?.has?.('step3')), false);
+});
+
+test('checkOnly on an all-ready plan still does not import', async () => {
+  const fe = fakeEmaktab();
+  const r = await createEmaktabHttp({ cookies, fetch: fe.fetch }).importOne(await job({ checkOnly: true }));
+  assert.equal(r.state, 'checked');
+  assert.equal(r.bad, 0);
+  assert.equal(fe.calls.some(c => c.body?.has?.('step3')), false);
+});
