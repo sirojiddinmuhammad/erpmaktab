@@ -40,7 +40,8 @@ function setup(over = {}) {
   const deps = {
     db, t, L: async () => 'uz', adminId: ADMIN,
     config: { testers: new Set([TESTER]), concurrency: 2, maxItems: over.maxItems ?? 10 },
-    runner: createRunner({ concurrency: 2, log: () => {} }),
+    runner: over.runner || createRunner({ concurrency: 2, log: () => {} }),
+    editDelayMs: 0,
     createHttp: () => http,
     login: async () => { calls.logins++; if (over.loginError) throw over.loginError; return { cookies: [] }; },
     askTwoFactor: async (ctx, id, lang, es, link) => { ctx.replies.push({ text: `2FA ${link}` }); },
@@ -72,6 +73,7 @@ function ctxFor(id, { data, text } = {}) {
     answerCallbackQuery: async () => {},
     api: {
       sendMessage: async (chat, text, opts) => { replies.push({ text, opts }); return { message_id: replies.length }; },
+      editMessageText: async (chat, id, text, opts) => { replies.push({ text, opts, edit: true, id }); },
       deleteMessage: async () => {},
     },
   };
@@ -157,7 +159,7 @@ test('Tasdiqlash runs in background with the right job and reports', async () =>
   const s = setup();
   await s.flow.command(ctxFor(TESTER));
   const c = await press(s, TESTER, 'au:ok');
-  assert.equal(c.replies[0].text, t('uz', 'auto_started', { n: 3 }));
+  assert.match(c.replies[0].text, /0\/3/);
   await tick();
   const j = s.calls.importOne[0];
   assert.deepEqual({ year: j.year, school: j.school, periodId: j.periodId, subgroupId: j.subgroupId },
@@ -355,4 +357,34 @@ test('an unclear eMaktab answer is logged with its snippets for the admin', asyn
   await tick();
   assert.match(s.calls.admin.at(-1), /Данные сохранены/);
   assert.match(s.calls.admin.at(-1), /planning\/import/);
+});
+
+test('progress: one message lists every item, then is edited as items finish', async () => {
+  const s = setup();
+  await s.flow.command(ctxFor(TESTER));
+  const c = await press(s, TESTER, 'au:ok');
+  const first = c.replies[0];
+  assert.match(first.text, /4-A · Математика · Весь класс/);
+  assert.match(first.text, /7-B · Информатика · Весь класс/);
+  await tick(20);
+  const edits = c.replies.filter(r => r.edit && r.id === 1);
+  assert.ok(edits.length >= 1, 'edited');
+  const last = edits.at(-1).text;
+  assert.match(last, /Avtomatik import tugadi/);
+  assert.equal((last.match(/✅/g) || []).length, 3);
+  assert.doesNotMatch(last, /⏳|▫️/);
+});
+
+test('progress: a queued run says it is waiting', async () => {
+  let release;
+  const runner = createRunner({ concurrency: 1, log: () => {} });
+  const s = setup({ runner, maxItems: 1, importOne: () => new Promise(r => { release = () => r({ state: 'done', imported: 1, rows: [] }); }) });
+  await s.flow.command(ctxFor(ADMIN));
+  await press(s, ADMIN, 'au:ok');
+  await tick();
+  await s.flow.command(ctxFor(TESTER));
+  const c = await press(s, TESTER, 'au:ok');
+  assert.ok(c.replies[0].text.includes(t('uz', 'auto_prog_queue')), c.replies[0].text);
+  release(); await tick(10);
+  release(); await tick(10);
 });
