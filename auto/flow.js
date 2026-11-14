@@ -286,16 +286,25 @@ export function createAutoFlow(deps) {
   }
 
   async function mergeItem(ctx, id, lang, st, item, text) {
-    const file = path.join(tmpDir, `${id}_${Date.now()}_auto.xlsx`);
-    await writeFile(file, item.buf);
-    const rows = await readRows(file);
-    const { pairs, error } = parsePairs(text, rows.length);
-    if (error) return ctx.reply(t(lang, 'merge_err', { err: error }));
-    st.wait = null;
-    const out = `${file}.merged.xlsx`;
-    await writeRows(applyMerges(rows, pairs), out);
     const prev = item.buf;
-    item.buf = await readFile(out);
+    try {
+      const file = path.join(tmpDir, `${id}_${Date.now()}_auto.xlsx`);
+      await writeFile(file, item.buf);
+      const { rows, sheetName } = await readRows(file);   // xlsx.js: { rows, sheetName }
+      const { pairs, error } = parsePairs(text, rows.length);
+      if (error) return ctx.reply(t(lang, 'merge_err', { err: error }));
+      st.wait = null;
+      const out = `${file}.merged.xlsx`;
+      await writeRows(applyMerges(rows, pairs), out, sheetName);
+      item.buf = await readFile(out);
+    } catch (e) {
+      // jim qolmaymiz: sababini aytib, o'sha elementni qayta ko'rsatamiz
+      log('[auto] merge', e?.message || e);
+      st.wait = null;
+      item.buf = prev;
+      await ctx.reply(t(lang, 'error', { msg: e?.message || String(e) }));
+      return showDecision(ctx, st, lang, item);
+    }
     await recheckOne(ctx, id, lang, st, item, async () => {
       if (item.checkFail) { item.buf = prev; await ctx.reply(t(lang, 'auto_st_fail', { why: whyText(lang, item.checkFail) }), { parse_mode: 'HTML' }); return showDecision(ctx, st, lang, item); }
       if (item.check.bad === 0) {

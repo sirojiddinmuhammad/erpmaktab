@@ -284,7 +284,7 @@ bot.on('message:text', async (ctx, next) => {
 
   // avtomatik import javoblari (guruh qatori, birlashtirish) — fonda
   if (!flow.get(id) && auto.wants(id)) {
-    auto.text(ctx).catch(e => console.error('[auto] text', e?.message || e));
+    auto.text(ctx).catch(e => autoFail(ctx, 'text', e));
     return;
   }
 
@@ -1299,12 +1299,18 @@ const auto = createAutoFlow({
   readFile: p => fs.readFile(p), tmpDir: TMP,
   writeFile: async (p, b) => { await fs.mkdir(TMP, { recursive: true }); await fs.writeFile(p, b); },
 });
+// Fondagi /auto xatosi: logga va o'qituvchiga (jim qolmasin)
+async function autoFail(ctx, where, e) {
+  console.error(`[auto] ${where}`, e?.message || e);
+  const lang = await L(ctx.from.id).catch(() => 'uz');
+  await ctx.reply(t(lang, 'error', { msg: e?.message || String(e) })).catch(() => {});
+}
 bot.command('auto', (ctx, next) => {
   if (!auto.allowed(ctx.from.id)) return next();
-  auto.command(ctx).catch(e => console.error('[auto] command', e?.message || e));
+  auto.command(ctx).catch(e => autoFail(ctx, 'command', e));
 });
 bot.callbackQuery(/^au:/, ctx => {
-  auto.callback(ctx).catch(e => console.error('[auto] callback', e?.message || e));
+  auto.callback(ctx).catch(e => autoFail(ctx, 'callback', e));
 });
 
 bot.command('panel', async ctx => {
