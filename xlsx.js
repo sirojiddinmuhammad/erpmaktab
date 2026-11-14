@@ -96,3 +96,31 @@ export function applyMerges(rows, pairs) {
   });
   return out;
 }
+
+// Brauzersiz import: sarlavha qatori va bo'sh bo'lmagan qatorlar soni
+export async function readSheetInfo(buf) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws) return { headers: [], rowCount: 0 };
+  let rowCount = 0;
+  ws.eachRow(row => { if (row.values.some(v => clean(v?.text ?? v?.result ?? v) !== '')) rowCount++; });
+  return { headers: await readHeaderRow(buf, ws), rowCount };
+}
+
+// Birinchi qator (sarlavha) matnlari — brauzersiz importda ustunlarni moslash uchun
+export async function readHeaderRow(buf, sheet = null) {
+  let ws = sheet;
+  if (!ws) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    ws = wb.worksheets[0];
+  }
+  if (!ws) return [];
+  const head = ws.getRow(1);
+  const n = Math.max(ws.columnCount, head.cellCount);
+  const out = [];
+  for (let c = 1; c <= n; c++) out.push(clean(head.getCell(c).text));
+  while (out.length && !out.at(-1)) out.pop();
+  return out;
+}

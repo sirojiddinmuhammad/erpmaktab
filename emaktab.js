@@ -7,7 +7,7 @@ export const TWO_FA_RE = /login\.emaktab\.uz\/login\/2fa-verification/i;
 
 // Fayldagi ustun nomi uchun shablonlar -> eMaktabdagi maydon.
 // Rus, o'zbek lotin va kirill variantlari qamrab olingan.
-const COLUMN_RULES = [
+export const COLUMN_RULES = [
   {
     target: 'Номер урока',
     re: /^\s*(п\s*\/?\s*н|№|n|nn|t\s*\/?\s*r|т\s*\/?\s*р|тартиб|tartib|дарс\s*раками|dars\s*raqami|номер|raqam|raqami|рақам|рақами)\s*$/i,
@@ -23,7 +23,7 @@ const COLUMN_RULES = [
 ];
 
 // eMaktab interfeysi ikki tilda. Barcha so'zlar saytdan olingan.
-const W = {
+export const W = {
   next:      ['Далее', 'Keyingi qadam'],
   back:      ['Назад', 'Orqaga'],
   import:    ['Импортировать', 'Import qilish'],
