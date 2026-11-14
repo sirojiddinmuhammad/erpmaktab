@@ -24,3 +24,14 @@ test('SCHEMA: plan_inbox va subject_extra.archived_at faqat qo\'shish bilan', ()
   assert.match(SCHEMA, /alter table subject_extra add column if not exists archived_at timestamptz;/);
   assert.doesNotMatch(SCHEMA.split('plan_inbox')[1] ?? '', /\b(drop table|truncate|delete from)\b/i);
 });
+
+test('SCHEMA: auto_grading va auto_medium faqat ADD COLUMN bilan', () => {
+  assert.match(SCHEMA, /alter table accounts add column if not exists auto_grading text;/);
+  assert.match(SCHEMA, /alter table accounts add column if not exists auto_medium text;/);
+});
+
+test('setAutoGrading / setAutoMedium rad etadi noto\'g\'ri qiymatni (bazaga bormasdan)', async () => {
+  const db = await import('../db.js');
+  await assert.rejects(db.setAutoGrading(1, 'x'), /grading/);
+  await assert.rejects(db.setAutoMedium(1, 'en'), /medium/);
+});

@@ -157,6 +157,10 @@ create index if not exists plan_inbox_pending
 
 -- fanlar o'chirilmaydi, arxivlanadi
 alter table subject_extra add column if not exists archived_at timestamptz;
+
+-- avtomatik import: o'qituvchi bir marta beradigan javoblar
+alter table accounts add column if not exists auto_grading text;
+alter table accounts add column if not exists auto_medium text;
 `;
 
 export async function ensureSchema() { await pool.query(SCHEMA); }
@@ -241,6 +245,28 @@ export async function getCreds(tgId) {
   const a = await accountOf(tgId);
   if (!a?.password_enc) return null;
   return { username: a.login, password: dec(a.password_enc) };
+}
+
+// ---------- avtomatik import javoblari ----------
+export async function getAutoPrefs(tgId) {
+  const a = await accountOf(tgId);
+  return { grading: a?.auto_grading || null, medium: a?.auto_medium || null };
+}
+
+async function setAccountField(tgId, column, value) {
+  await pool.query(
+    `update accounts set ${column} = $2
+      where id = (select account_id from users where tg_id = $1)`, [tgId, value]);
+}
+
+export async function setAutoGrading(tgId, value) {
+  if (!['bsb', 'normal'].includes(value)) throw new Error(`auto grading: ${value}`);
+  await setAccountField(tgId, 'auto_grading', value);
+}
+
+export async function setAutoMedium(tgId, value) {
+  if (!['uz', 'ru', 'both'].includes(value)) throw new Error(`auto medium: ${value}`);
+  await setAccountField(tgId, 'auto_medium', value);
 }
 
 export async function setClasses(tgId, classes) {
