@@ -62,7 +62,9 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
   - `parseToken(html) -> string|null` — `__RequestVerificationToken` qiymati
   - `parseHidden(html, name) -> string|null` — `file` kabi yashirin maydonlar
   - `parseSelect(html, name) -> [{ value, label, selected }]`
-  - `mapColumnsFromHtml(html) -> { fields: { [selectName]: value }, done: number, report: string }` — `COLUMN_RULES` bo'yicha, topilmasa tartib bo'yicha; moslanmagan ustun → `-1`
+  - `mapColumnsFromHeaders(headers: string[]) -> { values: number[], done: number, report: string }` — `values[i]` = `select_i` qiymati (0 raqam, 1 mavzu, 2 vazifa, −1 o'tkazish); `COLUMN_RULES` bo'yicha, kamida 3 tasi topilmasa tartib bo'yicha
+  - `countColumnSelects(html) -> number` — 2-qadamdagi `select_N` soni
+  - `parseMyClasses(html) -> { school, periodId, classes: [{ groupId, className, subjects: [{ id, name }] }] }`
   - `previewFromHtml(html) -> { rows: [{ rowId, lesson, topic, hw, ok, status }], selectName }` — `preview()` qoidalari: holat faqat o'z ustunidan, `^(xato|хато|ошибка)!?$` belgisi, `W.ready`/`W.error`
   - `isLoginPage(status, location, html) -> boolean`
   - `isMaintenance(html) -> boolean` — hozirgi `assertAlive` matni bilan bir xil qoida
@@ -72,8 +74,10 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
 - [ ] **Step 1: Failing testlar** (`test/emaktab-parse.test.js`):
   - `parseToken(step1)` fixture'dagi `XXX` tokenni qaytaradi; tokensiz HTML → `null`.
   - `parseHidden(step2, 'file')` `storage:///` bilan boshlanadi.
-  - `mapColumnsFromHtml(step2).done === 3` va dars raqami/mavzu/vazifa qiymatlari README'dagi 0/1/2 ga teng.
-  - Sarlavhalari `A`, `B`, `C` bo'lgan sintetik step2 HTML → tartib bo'yicha 0,1,2 (Review Focus 3).
+  - `mapColumnsFromHeaders(['№', 'Тема урока', 'Домашнее задание']).values` → `[0, 1, 2]`; `['Mavzu', 'T/r', 'Uy vazifasi']` → `[1, 0, 2]`.
+  - `mapColumnsFromHeaders(['A', 'B', 'C'])` → tartib bo'yicha `[0, 1, 2]` (Review Focus 3); `['A','B','C','D']` → `[0,1,2,-1]`.
+  - `countColumnSelects(step2) === 3`.
+  - `parseMyClasses(myclasses)` → 3 sinf; `4-A` da 4 fan, `subjects[1]` = `{ id: '1984492252597963094', name: 'Информатика' }`; `school === '1000000000001'`, `periodId === '2530691816384972571'`.
   - `previewFromHtml(step3).rows.length > 0`, har qatorda `rowId`; "Работа над ошибками" mavzuli sintetik qator `ok: true`; holati "Ошибка!" qator `ok: false`; "Импортируемая тема урока заменит текущую…" holatli qator `ok: true`.
   - `periodNumber('2 четверть') === 2`, `periodNumber('3-chorak') === 3`, `periodNumber('II chorak') === 2`, `periodNumber('Год') === null`.
   - `isLoginPage(302, 'https://login.emaktab.uz/...', '') === true`.
@@ -93,7 +97,7 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
 - Produces:
   - `cookiesFromState(storageState) -> [{ name, value, domain, path }]` — faqat `emaktab.uz` domenlari
   - `createEmaktabHttp({ cookies, fetch = globalThis.fetch, timeoutMs = 30_000 })` →
-    - `listClassSubjects() -> Promise<[{ groupId, className, subjects: [{ id, name }] }]>`
+    - `listClassSubjects() -> Promise<{ school, periodId, classes }>` (`parseMyClasses` natijasi)
     - `subgroups(groupId) -> Promise<[{ id, name }]>` (birinchisi `{ id: '', name: 'Весь класс' }`)
     - `periods(groupId) -> Promise<[{ id, name, n }]>` (`n = periodNumber(name)`)
     - `importOne({ file: Buffer, fileName, year, groupId, subjectId, subgroupId = '', periodId, okOnly = false }) -> Promise<{ state: 'done'|'needs_choice'|'failed', rows, imported, result }>`
@@ -106,10 +110,9 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
   - Xato qatorli step3 fixture → step3 POST **yuborilmaydi**, `state: 'needs_choice'`, `rows` da `ok:false` qatorlar.
   - Xuddi shu, `okOnly: true` → step3 yuboriladi, xato qatorlar `=0`, tayyorlar `=1`, `imported` = tayyorlar soni.
   - Birinchi GET 302 → login → `SESSION_EXPIRED` (Review Focus 2).
-  - Yarim qolgan import sahifasi (fayl maydoni yo'q, bekor qilish havolasi bor) → bekor qilish GET, keyin qaytadan GET import.
   - Har `fetch` chaqiruvida `signal` bor.
 - [ ] **Step 2:** FAIL.
-- [ ] **Step 3:** Yozish. `redirect: 'manual'`; multipart — `FormData` + `new Blob([file])`; urlencoded — `URLSearchParams`. `listClassSubjects`: Task 1 da topilgan joydan `group` ro'yxati + har guruh uchun `getsubjects-cmd` (agar ro'yxat faqat 2-qadamda bo'lsa — README'dagi yo'l bilan; bo'sh-shablon fayl `Buffer` modul ichida exceljs bilan yaratiladi va oxirida import bekor qilinadi).
+- [ ] **Step 3:** Yozish. `redirect: 'manual'`; multipart — `FormData` + `new Blob([file])`; urlencoded — `URLSearchParams`. `listClassSubjects` — `GET /v2/myclasses` + `parseMyClasses`. `importOne` ustun xaritasi uchun faylni `readRows` (`xlsx.js`) bilan o'qib birinchi qatorni `mapColumnsFromHeaders` ga beradi; `firstRow=0`. 1-qadam formasi yashirin maydonlari sahifadan olinadi, `group/subject/subgroup/period/year/school` o'rnatiladi.
 - [ ] **Step 4:** PASS; `npm test` yashil.
 - [ ] **Step 5: Commit** — `feat(auto): browserless eMaktab import client`
 
@@ -120,16 +123,16 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
 - Test: `test/auto-match.test.js`
 
 **Interfaces:**
-- Consumes: `guessSubject` (`hints.js`), `mediumOf` (`dashboard/server.js`), `quarterOfDate`, `schoolYearOfDate` (`dashboard/inbox.js`).
+- Consumes: `guessSubject` (`hints.js`), `quarterOfDate`, `schoolYearOfDate` (`dashboard/inbox.js`).
 - Produces:
   - `readAutoConfig(env) -> { testers: Set<number>, concurrency: number, maxItems: number }` (standartlar 2 va 1; noto'g'ri son → standart)
   - `canAuto(tgId, { adminId, testers }) -> boolean`
   - `gradeOfClass(name) -> number|null` — 1..11, aks holda `null`
   - `needsGradingAnswer(classes, accountGrading) -> boolean` — 5–11 sinf bor va `accountGrading` `null`
-  - `buildItems({ classes, quarter, year, accountGrading, subjects, keyOf, allowed, findPlan, maxItems }) -> Promise<Item[]>`
+  - `buildItems({ classes, quarter, year, accountGrading, accountMedium, mediumOverride = {}, keyOf, allowed, findPlan, maxItems }) -> Promise<Item[]>`
+    - `medium`: `accountMedium` `'uz'|'ru'` → shu; `'both'` → `mediumOverride[groupId] || 'uz'`
     - `Item = { i, groupId, className, subjectId, subjectName, grade, subjectKey, medium, grading, plan|null, reason|null, selected, subgroupId: '' , subgroupName: 'Весь класс' }`
-    - `subjects` — `admin.allSubjects()` (`{ key, uz, ru }`), `medium = mediumOf(subjectName, subjects.find(key))`
-    - `reason`: `'grade'` | `'subject'` | `'medium'` | `'noplan'`; `selected = !!plan` faqat birinchi `maxItems` ta rejali elementlar uchun
+    - `reason`: `'grade'` | `'subject'` | `'noplan'`; `selected = !!plan` faqat birinchi `maxItems` ta rejali elementlar uchun
 
 - [ ] **Step 1: Failing testlar:**
   - `readAutoConfig({ AUTO_TESTERS: ' 111, 222 ,x' })` → `testers` = {111, 222}, `concurrency 2`, `maxItems 1`; `AUTO_MAX_ITEMS: '50'` → 50; `'-3'` → 1.
@@ -137,6 +140,7 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
   - `gradeOfClass`: `'5-A'`→5, `'11-В'`→11, `'5А'`→5, `'5-A (1-guruh)'`→5, `'12-A'`→null, `'A'`→null (Review Focus 1).
   - `buildItems`: grade 3 → `grading 'normal'` (accountGrading `'bsb'` bo'lsa ham); grade 7 + `'bsb'` → `'bsb'`; topilmagan reja → `plan null, reason 'noplan', selected false`; 3 ta rejali, `maxItems 1` → faqat birinchisi `selected` (Review Focus 5); fan aniqlanmasa → `reason 'subject'`.
   - `findPlan` ga `{ grade, subjectKey, quarter, year, medium, grading }` aynan shu maydonlar bilan chaqiriladi.
+  - `accountMedium 'ru'` → hamma elementda `medium 'ru'`; `'both'` + `mediumOverride { [g]: 'ru' }` → faqat o'sha sinf `ru`, qolganlari `uz`.
 - [ ] **Step 2:** FAIL.
 - [ ] **Step 3:** Yozish.
 - [ ] **Step 4:** PASS; `npm test` yashil.
@@ -149,9 +153,9 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
 - Test: `test/db-sql.test.js` (mavjud uslubda) + PGlite smoke (scratchpad `pg/smoke.mjs`)
 
 **Interfaces:**
-- Produces: `getAutoGrading(tgId) -> 'bsb'|'normal'|null`, `setAutoGrading(tgId, value)` (`value` faqat `'bsb'|'normal'`, aks holda xato)
+- Produces: `getAutoPrefs(tgId) -> { grading: 'bsb'|'normal'|null, medium: 'uz'|'ru'|'both'|null }`, `setAutoGrading(tgId, value)` (`'bsb'|'normal'`), `setAutoMedium(tgId, value)` (`'uz'|'ru'|'both'`); boshqa qiymat → xato
 
-- [ ] **Step 1:** Failing test: sxema matnida `alter table accounts add column if not exists auto_grading text`; `setAutoGrading(1, 'x')` rad etiladi; SQL `users → accounts` orqali yangilaydi.
+- [ ] **Step 1:** Failing test: sxema matnida `alter table accounts add column if not exists auto_grading text` va `... auto_medium text`; `setAutoGrading(1, 'x')`, `setAutoMedium(1, 'en')` rad etiladi; SQL `users → accounts` orqali yangilaydi.
 - [ ] **Step 2:** FAIL. **Step 3:** Yozish. **Step 4:** PASS + PGlite: ustun qo'shiladi, ikki marta `ensureSchema` xatosiz, yozish/o'qish ishlaydi.
 - [ ] **Step 5: Commit** — `feat(db): store auto-import grading answer per account`
 
@@ -184,16 +188,17 @@ Kod emas — keyingi parserlar shu haqiqiy sahifalarga yoziladi. Import yuborilm
 **Interfaces:**
 - Consumes: Task 2–6; bot.js'dan in'ektsiya: `db`, `t`, `EmaktabSession`, `askTwoFactor`, `fetchPlanFile`, `admin.allSubjects`, `admin.keyOfName`, `liveSubjectKeys`, `sendChunks`, `parsePairs`, `applyMerges`, `readRows`, `writeRows`, `notifyAdmin`, `now = () => new Date()`.
 - Produces: `createAutoFlow(deps) -> { command(ctx), callback(ctx, data), text(ctx) -> boolean }`
-  - Callback ma'lumotlari (`au:` prefiksi, ≤64 bayt): `au:ok`, `au:x`, `au:q`, `au:q:<1-4>`, `au:sel`, `au:t:<i>`, `au:seld`, `au:g`, `au:gs:<i>:<k>`, `au:md:<i>:<uz|ru>`, `au:bsb:<1|0>`, `au:m:<i>`, `au:k:<i>`, `au:s:<i>`
+  - Callback ma'lumotlari (`au:` prefiksi, ≤64 bayt): `au:ok`, `au:x`, `au:q`, `au:q:<1-4>`, `au:sel`, `au:t:<i>`, `au:seld`, `au:g`, `au:gs:<i>:<k>`, `au:md:<groupIndex>`, `au:lang:<uz|ru|both>`, `au:bsb:<1|0>`, `au:m:<i>`, `au:k:<i>`, `au:s:<i>`
   - Holat: xotirada `Map(tgId → { items, quarter, year, cookies, choice: Map(i → { rows, file, fileName }) , at })`, 2 soat; topilmasa → `t(lang,'session_end')` (Review Focus 4)
 
 - [ ] **Step 1: Failing testlar** (soxta `ctx`, soxta deps):
   - Sinovchi emas → `command` hech narsa yubormaydi va `false` qaytaradi (bot.js keyingi handlerga o'tadi).
   - Akkaunt yo'q (`db.getCreds` → null) → `need_login`.
-  - 5–11 sinf va `getAutoGrading` null → BSB savoli, `au:bsb:1` → `setAutoGrading(id,'bsb')` va ko'rib chiqish chiqadi.
+  - `getAutoPrefs` `medium null` → til savoli (O'zbekcha / Ruscha / Ikkalasi), `au:lang:ru` → `setAutoMedium(id,'ru')`; keyin (kerak bo'lsa) BSB savoli.
+  - 5–11 sinf va `grading null` → BSB savoli, `au:bsb:1` → `setAutoGrading(id,'bsb')` va ko'rib chiqish chiqadi.
   - Ko'rib chiqish matnida chorak, yil, har qator "✅ reja bor (N mavzu)" / "❌ …", "Mavjud mavzular almashtiriladi"; 40 elementda `sendChunks` ishlatiladi (Review Focus 5).
   - `au:q:3` → `buildItems` `quarter 3` bilan qayta.
-  - `reason 'medium'` qatori → "O'zbekcha / Ruscha" tugmalari; `au:md:<i>:ru` → o'sha sinfning shu tilli elementlari `medium 'ru'` bilan qayta moslanadi.
+  - `medium 'both'` bo'lsa ko'rib chiqishda har sinf uchun "🇺🇿/🇷🇺 <sinf>" tugmasi; `au:md:<groupIndex>` → `mediumOverride` almashadi va ro'yxat qayta moslanadi. `uz`/`ru` bo'lsa bu tugmalar yo'q.
   - `au:g` → qator raqami so'raladi; `text(ctx)` "2" → `subgroups(groupId)` tugmalari; `au:gs:2:1` → element `subgroupId`/`subgroupName` yangilanadi, `importOne` shu `subgroupId` bilan chaqiriladi.
   - `au:t:<i>` belgini almashtiradi; `au:ok` → `runner.start` faqat `selected` elementlar bilan; hech biri tanlanmagan → `auto_none`.
   - `au:ok` handler `runner.start` dan keyin darhol qaytadi (fon) va `auto_started` yuboradi.

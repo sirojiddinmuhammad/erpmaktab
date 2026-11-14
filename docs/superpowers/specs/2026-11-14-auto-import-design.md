@@ -112,9 +112,12 @@ Har eMaktab sinf × fan uchun reja kaliti
 - **grade** — sinf nomidagi raqam (`"5-A"` → 5, `"11-В"` → 11). Raqam o'qilmasa — ❌ qator.
 - **subject_key** — eMaktab fan nomidan `guessSubject(name, keyOf, liveSubjectKeys())`
   (bot va dashboard ishlatayotgan o'sha funksiya, arxivlanganlar chiqarilgan).
-- **medium** — fan nomi qaysi tilda (`mediumOf` qoidasi: o'zbek/rus belgilari →
-  fan lug'atidagi til → yozuv). Aniqlanmasa — o'sha sinf uchun bir marta
-  "O'zbekcha / Ruscha" so'raladi.
+- **medium** — o'qituvchidan **bir marta** so'raladi: "Qaysi tilda dars berasiz?
+  [O'zbekcha] [Ruscha] [Ikkalasi]" (`accounts.auto_medium`: `'uz'|'ru'|'both'`).
+  `uz`/`ru` — barcha sinflarga shu til. `both` — har sinf standart `uz`, ko'rib
+  chiqishda har sinf qatorida "🇺🇿/🇷🇺" almashtirish tugmasi.
+  (eMaktab fan nomlari interfeys tilida keladi va sinf sahifasida o'qitish tili yo'q —
+  fan nomidan aniqlash ishonchsiz; Task 1 topilmasi, admin qarori.)
 - **quarter** — sanadan (`quarterOfDate`, Toshkent vaqti), o'qituvchi o'zgartira oladi.
 - **year** — `schoolYearOfDate`.
 - **grading** — 1–4 `normal`; 5–11 akkauntdagi BSB javobi.
@@ -135,26 +138,25 @@ Har eMaktab sinf × fan uchun reja kaliti
 
 ### Sinf × fanlar
 
-- `listClassSubjects()` → `[{ groupId, className, subjects: [{ id, name }] }]`.
-  Manba: import sahifasining 2-qadamidagi `group` ro'yxati va
-  `getsubjects-cmd?school=&group=` JSON — ya'ni aynan import qabul qiladigan qiymatlar.
-  Agar `group` ro'yxati faqat fayl yuklangandan keyin chiqsa, bitta kichik
-  bo'sh-shablon fayl bilan 1-qadam qilinadi va import bekor qilinadi
-  (amalga oshirishdagi birinchi tekshiruv — 8-bo'lim, 0-qadam).
+- `listClassSubjects()` → `{ school, periodId, classes: [{ groupId, className, subjects: [{ id, name }] }] }`.
+  Manba: `GET /v2/myclasses` — sinf havolasi `/v2/class?class=<groupId>` (matni — sinf nomi)
+  va keyingi fan havolalari `/journal/school/<school>/group/<groupId>/subject/<subjectId>?periodId=<id>`
+  (`title` — fan nomi). Fayl yuklash shart emas (Task 1 topilmasi).
 - Kichik guruhlar: `getsubgroups-cmd?group=`; choraklar: `getperiods-cmd?group=`
   (nomi "2 четверть" / "2-chorak" → raqam).
 
 ### Bitta sinf × fanni import qilish — `importOne(job)`
 
 1. `GET /v2/journals/planning/import` → `__RequestVerificationToken`.
-   Yarim qolgan import bo'lsa — bekor qilish havolasi bosiladi (hozirgi `W.cancelImp`).
+   Import holatsiz (fayl yashirin `file` maydonida yuradi) — "osilib qolgan import" yo'q.
 2. **1-qadam:** multipart POST: token, `multifile1` (reja fayli), `firstRow=0`, `step1`
    → javobdan yashirin `file=storage:///…`.
 3. **2-qadam:** urlencoded POST: `year, group, subject, subgroup ('' = Весь класс),
    period, select_0..N, file, step2`. `select_i` (−1 o'tkazish, 0 dars raqami,
-   1 mavzu, 2 uy vazifasi) — ustun sarlavhalari hozirgi `COLUMN_RULES` bilan
-   aniqlanadi; topilmasa tartib bo'yicha (raqam, mavzu, vazifa) — `mapColumns` mantiqi
-   HTML ustida, sof funksiya `mapColumnsFromHtml(html)` sifatida.
+   1 mavzu, 2 uy vazifasi) — eMaktab moslash jadvalida ustun nomi bo'sh keladi, shuning
+   uchun ustunlar **faylning o'z sarlavha qatoridan** `COLUMN_RULES` bilan aniqlanadi;
+   topilmasa tartib bo'yicha (raqam, mavzu, vazifa) — sof funksiya
+   `mapColumnsFromHeaders(headers)`. `select_i` soni 2-qadam sahifasidan olinadi.
 4. **Ko'rib chiqish:** 3-qadam jadvali `previewFromHtml(html)` bilan o'qiladi —
    hozirgi `preview()` qoidalari (holat faqat o'z ustunidan, `W.ready`/`W.error`,
    "Импортируемая тема урока заменит текущую…" ogohlantirish — xato emas).
@@ -166,8 +168,8 @@ Har eMaktab sinf × fan uchun reja kaliti
    rejalashtirish sahifasidan o'sha sinf × fan × chorak mavzular soni olinadi va
    kutilgan son bilan solishtiriladi. Mos kelmasa — ⚠️ "tekshirib ko'ring" va admin'ga log.
 
-Barcha HTML o'qish sof funksiyalar (`parseToken`, `parseStorageFile`, `parseGroups`,
-`mapColumnsFromHtml`, `previewFromHtml`, `parseImportResult`) — haqiqiy sahifa
+Barcha HTML o'qish sof funksiyalar (`parseToken`, `parseHidden`, `parseMyClasses`,
+`mapColumnsFromHeaders`, `previewFromHtml`, `parseImportResult`) — haqiqiy sahifa
 nusxalaridan olingan test fixture'lari bilan sinaladi.
 
 ## 7. Fon ishi
@@ -202,6 +204,7 @@ Birinchi import tekshirilgach admin uni oshiradi (masalan 50).
 
 - `alter table accounts add column if not exists auto_grading text;` — 5–11 uchun
   `'bsb'|'normal'|null`.
+- `alter table accounts add column if not exists auto_medium text;` — `'uz'|'ru'|'both'|null`.
 - Boshqa sxema o'zgarishi yo'q. Pul jadvallari (`ledger`, `balance`, `free_used`,
   `imports_ok`) o'zgarmaydi.
 
@@ -224,7 +227,7 @@ Birinchi import tekshirilgach admin uni oshiradi (masalan 50).
   `SESSION_EXPIRED` → bir marta qayta kirish); runner (bir o'qituvchiga bitta ish,
   `AUTO_CONCURRENCY`, bitta xato qolganlarini to'xtatmaydi); `chargeImport`
   chaqirilmasligi.
-- PGlite: `auto_grading` ustuni va o'qish/yozish.
+- PGlite: `auto_grading`, `auto_medium` ustunlari va o'qish/yozish.
 - Production: 8-bo'limdagi tartib, admin ishtirokida.
 
 ## 12. Quruvchiga qoldirilganlar (o'z qarorim)
