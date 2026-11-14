@@ -6,11 +6,19 @@ export function createRunner({ concurrency = 2, log = console.log } = {}) {
   const queue = [];
   let active = 0;
 
-  async function run(tgId, { items, work, onDone }) {
+  // Jarayon xabari uchun chaqiruvlar: xatosi ishni to'xtatmaydi
+  const safe = (fn, ...args) => { try { fn?.(...args); } catch (e) { log('[auto] progress', e?.message || e); } };
+
+  async function run(tgId, { items, work, onDone, onRun, onItemStart, onItemDone }) {
     const results = [];
-    for (const item of items) {
-      try { results.push(await work(item)); }
-      catch (error) { results.push({ state: 'failed', error }); }
+    safe(onRun);
+    for (let i = 0; i < items.length; i++) {
+      safe(onItemStart, i);
+      let res;
+      try { res = await work(items[i]); }
+      catch (error) { res = { state: 'failed', error }; }
+      results.push(res);
+      safe(onItemDone, i, res);
     }
     busySet.delete(tgId);      // natija xabari kelganda yangi /auto boshlash mumkin
     try { await onDone(results); }

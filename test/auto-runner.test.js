@@ -63,3 +63,26 @@ test('onDone is called exactly once even if it throws', async () => {
   assert.equal(r.busy(1), false);
   assert.ok(logs.some(l => /tg down/.test(l)));
 });
+
+test('runner reports when a job leaves the queue and each item start/finish', async () => {
+  const r = createRunner({ concurrency: 1, log: () => {} });
+  const ev = [];
+  const done = deferred();
+  r.start(1, {
+    items: ['a', 'b'], work: async it => ({ state: 'done', it }),
+    onRun: () => ev.push('run'),
+    onItemStart: i => ev.push(`start ${i}`),
+    onItemDone: (i, res) => ev.push(`done ${i} ${res.state}`),
+    onDone: done.resolve,
+  });
+  await done.p;
+  assert.deepEqual(ev, ['run', 'start 0', 'done 0 done', 'start 1', 'done 1 done']);
+});
+
+test('a throwing progress callback does not break the run', async () => {
+  const r = createRunner({ concurrency: 1, log: () => {} });
+  const done = deferred();
+  r.start(1, { items: ['a'], work: async () => ({ state: 'done' }), onItemStart: () => { throw new Error('tg'); }, onDone: done.resolve });
+  const res = await done.p;
+  assert.equal(res[0].state, 'done');
+});

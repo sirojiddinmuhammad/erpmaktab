@@ -17,7 +17,7 @@ const rowName = it => `${it.className} · ${it.subjectName} · ${it.subgroupName
 export function createAutoFlow(deps) {
   const { db, t, L, adminId, config, runner, createHttp, login, askTwoFactor, fetchPlanFile,
     keyOf, allowed, notifyAdmin, readRows, writeRows, readFile, writeFile, tmpDir, now = () => new Date(),
-    log = console.log } = deps;
+    log = console.log, editDelayMs = 2000 } = deps;
   const states = new Map();   // tgId -> holat
 
   const get = id => {
@@ -185,20 +185,45 @@ export function createAutoFlow(deps) {
     };
   }
 
-  function makeDone(ctx, id, lang) {
+  function resultLine(r, lang) {
+    const row = esc(rowName(r.item));
+    if (r.state === 'done') return t(lang, r.result?.ok === null ? 'auto_res_check' : 'auto_res_done', { row, n: r.imported });
+    if (r.state === 'needs_choice') return t(lang, 'auto_res_bad', { row, bad: r.rows.filter(x => !x.ok).length });
+    return t(lang, 'auto_res_fail', { row, why: r.why ? t(lang, `auto_why_${r.why}`) : esc(r.error || '?') });
+  }
+
+  // Jarayon xabari: header + har element qatori; uzun bo'lsa kutilayotganlar yig'iladi
+  function progressText(lang, items, prog, final) {
+    const done = prog.status.filter(Boolean).length;
+    const head = final ? t(lang, 'auto_title_done')
+      : t(lang, 'auto_prog_title', { q: items[0].quarter, done, n: items.length });
+    const lines = items.map((it, i) => (prog.status[i] ? resultLine(prog.status[i], lang)
+      : i === prog.current && !prog.queued ? `⏳ ${esc(rowName(it))} — ${t(lang, 'auto_prog_running')}`
+        : `▫️ ${esc(rowName(it))}`));
+    const top = [head, ...(prog.queued && !final ? [t(lang, 'auto_prog_queue')] : []), ''];
+    let body = lines;
+    const fits = b => [...top, ...b].join('\n').length <= CHUNK;
+    if (!fits(body)) {
+      const pending = body.filter(l => l.startsWith('▫️')).length;
+      body = body.filter(l => !l.startsWith('▫️'));
+      if (pending) body.push(t(lang, 'auto_more', { n: pending }));
+    }
+    let cut = false;
+    while (!fits(body) && body.length > 1) { body = body.slice(1); cut = true; }
+    if (cut) body = ['…', ...body];
+    return { text: [...top, ...body].join('\n'), complete: !cut && body.length === lines.length };
+  }
+
+  function makeDone(ctx, id, lang, showSummary) {
     return async results => {
       const st = get(id);
-      const lines = [t(lang, 'auto_title_done'), ''];
       const choices = [];
       for (const r of results) {
-        const row = esc(rowName(r.item));
-        if (r.state === 'done') lines.push(t(lang, r.result?.ok === null ? 'auto_res_check' : 'auto_res_done', { row, n: r.imported }));
-        else if (r.state === 'needs_choice') {
-          if (st) st.choices.set(r.item.i, { item: r.item, rows: r.rows, buf: r.buf });
-          choices.push(r);
-        } else lines.push(t(lang, 'auto_res_fail', { row, why: r.why ? t(lang, `auto_why_${r.why}`) : esc(r.error || '?') }));
+        if (r.state !== 'needs_choice') continue;
+        if (st) st.choices.set(r.item.i, { item: r.item, rows: r.rows, buf: r.buf });
+        choices.push(r);
       }
-      if (lines.length > 2) await sendLong(ctx, lines);
+      await showSummary(results);
       for (const r of choices) {
         const bad = r.rows.filter(x => !x.ok).length;
         await ctx.reply(t(lang, 'auto_res_choice', { row: esc(rowName(r.item)), bad }), {
@@ -219,8 +244,42 @@ export function createAutoFlow(deps) {
     };
   }
 
-  function startJobs(ctx, id, lang, st, items, opts) {
-    return runner.start(id, { items, work: makeWork(id, st, opts), onDone: makeDone(ctx, id, lang) });
+  // Ishni boshlaydi va bitta jarayon xabarini yuborib, har element tugashi bilan tahrirlaydi
+  async function startJobs(ctx, id, lang, st, items, opts) {
+    if (runner.busy(id)) return false;
+    const prog = { status: items.map(() => null), current: -1, queued: true };
+    let msgId = null, timer = null, last = 0, final = false;
+    const edit = async isFinal => {
+      const { text } = progressText(lang, items, prog, isFinal);
+      await ctx.api.editMessageText(ctx.chat.id, msgId, text, { parse_mode: 'HTML' }).catch(() => {});
+    };
+    const schedule = () => {
+      if (!msgId || final || timer) return;
+      timer = setTimeout(() => { timer = null; last = Date.now(); if (!final) edit(false); },
+        Math.max(0, last + editDelayMs - Date.now()));
+    };
+    const showSummary = async results => {
+      final = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      results.forEach((r, i) => { prog.status[i] = r; });
+      const { complete } = progressText(lang, items, prog, true);
+      if (msgId) await edit(true);
+      // To'liq ro'yxat xabarga sig'masa — alohida bo'laklab
+      if (!complete || !msgId) await sendLong(ctx, [t(lang, 'auto_title_done'), '', ...results.map(r => resultLine(r, lang))]);
+    };
+    const started = runner.start(id, {
+      items, work: makeWork(id, st, opts), onDone: makeDone(ctx, id, lang, showSummary),
+      onRun: () => { prog.queued = false; schedule(); },
+      onItemStart: i => { prog.current = i; schedule(); },
+      onItemDone: (i, r) => { prog.status[i] = r; schedule(); },
+    });
+    if (!started) return false;
+    if (!final) {
+      const m = await ctx.reply(progressText(lang, items, prog, false).text, { parse_mode: 'HTML' });
+      msgId = m?.message_id ?? null;
+      if (final && msgId) await edit(true);   // ish xabar kelguncha tugagan bo'lsa
+    }
+    return true;
   }
 
   async function mergeAndImport(ctx, id, lang, st, ch, text) {
@@ -234,8 +293,7 @@ export function createAutoFlow(deps) {
     await writeRows(applyMerges(rows, pairs), out);
     const buf = await readFile(out);
     st.choices.delete(ch.item.i);
-    if (!startJobs(ctx, id, lang, st, [ch.item], { file: buf })) return ctx.reply(t(lang, 'auto_busy'));
-    return ctx.reply(t(lang, 'auto_started', { n: 1 }));
+    if (!(await startJobs(ctx, id, lang, st, [ch.item], { file: buf }))) return ctx.reply(t(lang, 'auto_busy'));
   }
 
   const waiting = st => !!st?.wait && now() - st.waitAt < WAIT_TTL;
@@ -323,8 +381,7 @@ export function createAutoFlow(deps) {
         const picked = st.items.filter(i => i.selected && i.plan).slice(0, config.maxItems)
           .map(i => ({ ...i, quarter: st.quarter, year: st.year, school: st.school }));
         if (!picked.length) return ctx.reply(t(lang, 'auto_none'));
-        if (!startJobs(ctx, id, lang, st, picked)) return ctx.reply(t(lang, 'auto_busy'));
-        return ctx.reply(t(lang, 'auto_started', { n: picked.length }));
+        if (!(await startJobs(ctx, id, lang, st, picked))) return ctx.reply(t(lang, 'auto_busy'));
       }
       if (['m', 'k', 's'].includes(cmd)) {
         const ch = st.choices.get(Number(a));
@@ -333,8 +390,7 @@ export function createAutoFlow(deps) {
         if (cmd === 's') { st.choices.delete(ch.item.i); return ctx.reply(t(lang, 'auto_skipped', { row: esc(rowName(ch.item)) }), { parse_mode: 'HTML' }); }
         if (cmd === 'm') { setWait(st, 'merge'); st.mergeIdx = ch.item.i; return ctx.reply(t(lang, 'merge_prompt'), { parse_mode: 'HTML' }); }
         st.choices.delete(ch.item.i);
-        if (!startJobs(ctx, id, lang, st, [ch.item], { okOnly: true, file: ch.buf })) return ctx.reply(t(lang, 'auto_busy'));
-        return ctx.reply(t(lang, 'auto_started', { n: 1 }));
+        if (!(await startJobs(ctx, id, lang, st, [ch.item], { okOnly: true, file: ch.buf }))) return ctx.reply(t(lang, 'auto_busy'));
       }
     },
 

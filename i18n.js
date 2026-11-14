@@ -217,6 +217,11 @@ const S = {
   auto_btn_okonly:{ uz: '➡️ Ortiqchasiz import', ru: '➡️ Импорт без лишних' },
   auto_btn_skip: { uz: "⏭ O'tkazib yuborish", ru: '⏭ Пропустить' },
   auto_skipped:  { uz: "⏭ {row} — o'tkazib yuborildi", ru: '⏭ {row} — пропущено' },
+  auto_prog_title:{ uz: '🤖 <b>Avtomatik import</b> · {q}-chorak — {done}/{n}', ru: '🤖 <b>Автоимпорт</b> · {q} четверть — {done}/{n}' },
+  auto_prog_queue:{ uz: '⏳ Navbatda… (boshqa importlar tugashini kutyapti)', ru: '⏳ В очереди… (ждёт окончания других импортов)' },
+  auto_prog_running:{ uz: 'import qilinmoqda…', ru: 'импортируется…' },
+  auto_more:     { uz: '▫️ … yana {n} ta', ru: '▫️ … ещё {n}' },
+  auto_res_bad:  { uz: '⚠️ {row} — {bad} ta qator xato', ru: '⚠️ {row} — строк с ошибкой: {bad}' },
   auto_title_done:{ uz: '🤖 <b>Avtomatik import tugadi</b>', ru: '🤖 <b>Автоимпорт завершён</b>' },
   session_end:{ uz: 'Sessiya tugagan. Qaytadan boshlang.', ru: 'Сессия завершена. Начните заново.' },
   maintenance: {
