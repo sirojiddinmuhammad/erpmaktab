@@ -1,0 +1,231 @@
+# Avtomatik import (sinov bosqichi, brauzersiz) — dizayn
+
+Sana: 2026-11-14 · Branch: `feature/auto-import` · Holat: ko'rib chiqilmoqda
+Asos: `2026-11-10-plans-dashboard-design.md` (rejalar bazasi), `2026-11-14-drive-plans-design.md` (`fetchPlanFile`)
+
+## 1. Maqsad
+
+Hozir o'qituvchi har sinf × fan uchun ish reja faylini o'zi topadi, botga yuboradi
+va har birini alohida import qiladi. Admin barcha fanlar bo'yicha rejalar bazasini
+to'ldirib bo'ldi. Endi bot o'qituvchining eMaktab'idagi sinf × fanlarini o'zi
+aniqlab, bazadan mos rejalarni olib, hammasini bir tasdiq bilan import qilishi kerak.
+
+Bu **1-bosqich — sinov**: faqat admin va sinovchilar (birinchisi — adminning
+onasi) uchun, bepul. 2-bosqich (hammaga ochish va to'lov) — alohida spec.
+
+### Muvaffaqiyat mezoni
+
+- Sinovchi `/auto` yozadi → sinf × fanlar va topilgan rejalar ro'yxatini ko'radi →
+  "Tasdiqlash" → bir necha daqiqada hammasi eMaktab'ga import qilinadi va
+  natija xabari keladi.
+- Har bir sinf × fan importi eMaktab'da qo'lda import bilan bir xil natija beradi
+  (mavzu, uy vazifasi, dars raqami to'g'ri joyda).
+- Pul kodiga (`chargeImport`, `go` callback, balans, obuna) umuman tegilmaydi.
+- Oddiy o'qituvchilarning hozirgi qo'lda import oqimi o'zgarmaydi.
+
+### Maqsad emas (YAGNI)
+
+- To'lov, narx, obuna bilan bog'lash (2-bosqich).
+- Hammaga ochish, menyu tugmasi.
+- Qo'lda importni HTTP'ga ko'chirish (keyin, alohida).
+- Login'ni HTTP'ga ko'chirish — login Playwright'da qoladi (captcha, FingerprintId, 2FA).
+- Ish holatini bazada saqlash (deploy paytida yarim qolgan ish yo'qoladi — sinov uchun yetarli).
+
+### Anti-maqsad (texnik ishlasa ham muvaffaqiyatsizlik)
+
+- O'qituvchi tasdiqlamagan sinf × fanga import ketishi.
+- Noto'g'ri sinf/fan/chorakka reja tushishi (masalan rus guruhiga o'zbekcha reja).
+- Sinovchi bo'lmagan o'qituvchi `/auto` ni ishlata olishi.
+- Avtomatik ish bot javobini boshqa o'qituvchilar uchun ushlab qolishi.
+
+## 2. Cheklovlar
+
+- CLAUDE.md: `BOT_TOKEN`, `ENC_KEY` ga tegilmaydi; migratsiya faqat
+  `ADD COLUMN IF NOT EXISTS`; `DELETE/DROP/TRUNCATE` yo'q; `W` lug'ati o'zgarmaydi
+  (faqat o'qiladi va qayta ishlatiladi).
+- Pul faqat `go` callbackda yechiladi — avtomatik import umuman yechmaydi.
+- grammY yangilanishlarni ketma-ket ishlaydi → uzoq ish fonda (`await` siz) bajariladi.
+- Yangi npm paket yo'q (HTML regex va `fetch` bilan o'qiladi).
+- Sinov haqiqiy akkaunt va haqiqiy jurnalda bo'ladi.
+
+## 3. Yondashuvlar
+
+| | Yondashuv | Yutuq | Kamchilik |
+|---|---|---|---|
+| A | Har sinf × fan uchun hozirgi Playwright qadamlarini qayta ishlatish | Hamma qadam, oxirgi "Импортировать" ham, production'da sinalgan | Sekin (30–60 s/ta), 2000 o'qituvchida server og'ir |
+| **B** | **Login — Playwright; qolgani oddiy HTTP so'rovlar** | **Tez (bir necha soniya/ta), yengil, hammaga ochishga tayyor** | **Yangi kod; oxirgi import so'rovi hali hech yuborilmagan** |
+| C | Aralash: ko'rish HTTP, import Playwright | — | Ikki tizim, ikki xil xato; tashlandi |
+
+**Admin B ni tanladi.** B ning xavfi (oxirgi qadam sinalmagan) 8-bo'limdagi
+bosqichma-bosqich ishga tushirish bilan kamaytiriladi.
+
+## 4. Oqim (sinovchi ko'zi bilan)
+
+1. `/auto` (yashirin; menyuda yo'q). Ruxsat: `ADMIN_ID` yoki `AUTO_TESTERS`
+   (Telegram ID'lar, vergul bilan) ichida. Boshqalarga bot oddiy "noma'lum buyruq"
+   javobini beradi (buyruq borligi bilinmaydi).
+2. Akkaunt ulanmagan bo'lsa — hozirgi "Kirish" oqimiga yo'naltiriladi.
+3. Bot eMaktab'ga kiradi (6-bo'lim) va xabar beradi: `⏳ Sinflaringiz o'qilmoqda…`
+4. Birinchi marta 5–11-sinflar bo'lsa va maktab BSB bo'yicha ishlashi noma'lum bo'lsa,
+   bir marta so'raladi: **"Maktabingizda 5–11-sinflar BSB (baholash) bo'yichami?"
+   [Ha] [Yo'q]**. Javob akkauntda saqlanadi, keyin so'ralmaydi. 1–4-sinflar doim `normal`.
+5. Ko'rib chiqish xabari:
+
+   ```
+   🤖 Avtomatik import · 2-chorak · 2026/2027
+   1. 5-A · Ona tili — ✅ reja bor (34 mavzu)
+   2. 5-A · Adabiyot — ✅ reja bor (17 mavzu)
+   3. 7-Б · Русский язык — ✅ reja bor (34 mavzu)
+   4. 9-A · Tarbiya — ❌ bazada reja yo'q
+   Import qilinadi: 3 ta. Mavjud mavzular almashtiriladi.
+   [✅ Tasdiqlash] [📅 Chorakni o'zgartirish]
+   [👥 Guruhni o'zgartirish] [☑️ Tanlov] [✖️ Bekor]
+   ```
+
+   - **Chorakni o'zgartirish** → 1–4 tugmalar; ro'yxat qayta hisoblanadi.
+   - **Guruhni o'zgartirish** → raqam so'raladi ("qaysi qator?"), keyin o'sha sinfning
+     guruhlari (`Весь класс` + kichik guruhlar) tugma bo'lib chiqadi. Standart — `Весь класс`.
+   - **Tanlov** → har qator uchun ✅/⬜ almashtiruvchi tugmalar, keyin "Tayyor".
+6. Tasdiqlangach: `⏳ Import boshlandi: 3 ta. Tugagach xabar beraman.` — ish fonda.
+   Bot bu orada boshqa so'rovlarga javob beradi.
+7. Har sinf × fan uchun natija yig'iladi, oxirida bitta xabar:
+
+   ```
+   ✅ 5-A · Ona tili — 34/34 import qilindi
+   ✅ 7-Б · Русский язык — 34/34
+   ⚠️ 5-A · Adabiyot — 17 mavzudan 2 tasi xato (dars soni yetmaydi)
+      [Birlashtirish] [Ortiqchasiz import] [O'tkazib yuborish]
+   ```
+
+   Xato qatorlari bo'lgan sinf × fan **import qilinmaydi** — o'qituvchi tanlaguncha kutadi:
+   - **Birlashtirish** — hozirgi `parsePairs`/`applyMerges` matn oqimi
+     ("12+13, 20+21"), keyin o'sha sinf × fan qaytadan ko'rib chiqiladi;
+   - **Ortiqchasiz import** — faqat "tayyor" qatorlar import qilinadi (xato qatorlar `=0`);
+   - **O'tkazib yuborish** — import qilinmaydi.
+8. Admin'ga qisqa hisobot: kim, nechta ✅/⚠️/❌, xatolar matni.
+
+## 5. Moslash (sinf × fan → reja)
+
+Har eMaktab sinf × fan uchun reja kaliti
+`(grade, subject_key, quarter, year, medium, grading)`:
+
+- **grade** — sinf nomidagi raqam (`"5-A"` → 5, `"11-В"` → 11). Raqam o'qilmasa — ❌ qator.
+- **subject_key** — eMaktab fan nomidan `guessSubject(name, keyOf, liveSubjectKeys())`
+  (bot va dashboard ishlatayotgan o'sha funksiya, arxivlanganlar chiqarilgan).
+- **medium** — fan nomi qaysi tilda (`mediumOf` qoidasi: o'zbek/rus belgilari →
+  fan lug'atidagi til → yozuv). Aniqlanmasa — o'sha sinf uchun bir marta
+  "O'zbekcha / Ruscha" so'raladi.
+- **quarter** — sanadan (`quarterOfDate`, Toshkent vaqti), o'qituvchi o'zgartira oladi.
+- **year** — `schoolYearOfDate`.
+- **grading** — 1–4 `normal`; 5–11 akkauntdagi BSB javobi.
+- Topish: `db.findPlanByKey(...)` (arxivlanmagan). Topilmasa — ❌ "bazada reja yo'q".
+
+## 6. eMaktab bilan HTTP ishlash — `emaktab-http.js` (yangi)
+
+### Kirish
+
+- `accounts.storage_state` 12 soatdan yangi bo'lsa — undagi `schools.emaktab.uz`
+  cookie'lari olinadi. Aks holda `EmaktabSession.login()` (Playwright), so'ng
+  `storageState()` saqlanadi va cookie'lar olinadi. 2FA chiqsa — hozirgi
+  `askTwoFactor` oqimi; tasdiqlangach `/auto` davom etadi.
+- `createEmaktabHttp({ cookies, fetch })` — cookie jar (javobdagi `set-cookie`
+  qo'shiladi), `redirect: 'manual'`; login sahifasiga yo'naltirsa → `SESSION_EXPIRED`
+  xatosi → bir marta Playwright bilan qayta kirib, davom etadi.
+- Har so'rovga 30 s timeout. Texnik ishlar sahifasi → hozirgi `MAINTENANCE` xatosi.
+
+### Sinf × fanlar
+
+- `listClassSubjects()` → `[{ groupId, className, subjects: [{ id, name }] }]`.
+  Manba: import sahifasining 2-qadamidagi `group` ro'yxati va
+  `getsubjects-cmd?school=&group=` JSON — ya'ni aynan import qabul qiladigan qiymatlar.
+  Agar `group` ro'yxati faqat fayl yuklangandan keyin chiqsa, bitta kichik
+  bo'sh-shablon fayl bilan 1-qadam qilinadi va import bekor qilinadi
+  (amalga oshirishdagi birinchi tekshiruv — 8-bo'lim, 0-qadam).
+- Kichik guruhlar: `getsubgroups-cmd?group=`; choraklar: `getperiods-cmd?group=`
+  (nomi "2 четверть" / "2-chorak" → raqam).
+
+### Bitta sinf × fanni import qilish — `importOne(job)`
+
+1. `GET /v2/journals/planning/import` → `__RequestVerificationToken`.
+   Yarim qolgan import bo'lsa — bekor qilish havolasi bosiladi (hozirgi `W.cancelImp`).
+2. **1-qadam:** multipart POST: token, `multifile1` (reja fayli), `firstRow=0`, `step1`
+   → javobdan yashirin `file=storage:///…`.
+3. **2-qadam:** urlencoded POST: `year, group, subject, subgroup ('' = Весь класс),
+   period, select_0..N, file, step2`. `select_i` (−1 o'tkazish, 0 dars raqami,
+   1 mavzu, 2 uy vazifasi) — ustun sarlavhalari hozirgi `COLUMN_RULES` bilan
+   aniqlanadi; topilmasa tartib bo'yicha (raqam, mavzu, vazifa) — `mapColumns` mantiqi
+   HTML ustida, sof funksiya `mapColumnsFromHtml(html)` sifatida.
+4. **Ko'rib chiqish:** 3-qadam jadvali `previewFromHtml(html)` bilan o'qiladi —
+   hozirgi `preview()` qoidalari (holat faqat o'z ustunidan, `W.ready`/`W.error`,
+   "Импортируемая тема урока заменит текущую…" ogohlantirish — xato emas).
+   Har qatorda `rowId` (`select=<rowId>=1|0`).
+5. Xato qatorlar bo'lsa — to'xtaydi, natija `{ state: 'needs_choice', rows }`.
+6. **Import:** hamma qator tayyor (yoki "Ortiqchasiz" tanlangan) bo'lsa — token +
+   har qator `select` + `step3=Импортировать >` POST.
+7. **Natijani tekshirish:** javob sahifasidan muvaffaqiyat belgisi o'qiladi; noaniq bo'lsa
+   rejalashtirish sahifasidan o'sha sinf × fan × chorak mavzular soni olinadi va
+   kutilgan son bilan solishtiriladi. Mos kelmasa — ⚠️ "tekshirib ko'ring" va admin'ga log.
+
+Barcha HTML o'qish sof funksiyalar (`parseToken`, `parseStorageFile`, `parseGroups`,
+`mapColumnsFromHtml`, `previewFromHtml`, `parseImportResult`) — haqiqiy sahifa
+nusxalaridan olingan test fixture'lari bilan sinaladi.
+
+## 7. Fon ishi
+
+- `auto/runner.js`: `startRun(tgId, items)` — xotirada; bitta o'qituvchiga bir vaqtda
+  bitta ish (ikkinchi `/auto` → "Avvalgi import davom etyapti").
+- Global navbat `AUTO_CONCURRENCY` (standart 2) — bir vaqtda nechta o'qituvchi ishi.
+- O'qituvchi ichida sinf × fanlar ketma-ket (eMaktab importi bitta "ochiq import" holatiga ega).
+- Har element: `fetchPlanFile(plan.file_id)` → vaqtinchalik fayl → `importOne` → fayl o'chiriladi.
+- Bir element xatosi qolganlarini to'xtatmaydi.
+- `needs_choice` elementlar xotirada 2 soat saqlanadi; tugmalar shu vaqtda ishlaydi.
+- Loglar `[auto]` bilan; parol, cookie, token logga yozilmaydi.
+
+## 8. Ishga tushirish tartibi (B xavfini kamaytirish)
+
+0. **O'qish sinovi** (sinovchi akkauntida, import yo'q): login → sinf × fanlar →
+   bitta reja bilan 1–2-qadam → ko'rib chiqish jadvali → import bekor qilinadi.
+   Haqiqiy HTML nusxalari fixture sifatida saqlanadi (shaxsiy ma'lumotlar olib tashlanib).
+1. `AUTO_DRY_RUN=1` (standart yoqilgan): butun oqim ishlaydi, lekin 6-qadam
+   (`step3`) yuborilmaydi — natija xabarida "🧪 sinov: import yuborilmadi".
+2. Admin roziligi bilan **bitta** sinf × fan haqiqiy import (Tanlov orqali bittasi
+   qoldiriladi). Admin va sinovchi eMaktab'da natijani ko'radi.
+3. Hammasi to'g'ri bo'lsa — qolgan sinf × fanlar.
+
+`AUTO_DRY_RUN` Railway o'zgaruvchisi; admin o'zi o'chiradi.
+
+## 9. Ma'lumotlar bazasi
+
+- `alter table accounts add column if not exists auto_grading text;` — 5–11 uchun
+  `'bsb'|'normal'|null`.
+- Boshqa sxema o'zgarishi yo'q. Pul jadvallari (`ledger`, `balance`, `free_used`,
+  `imports_ok`) o'zgarmaydi.
+
+## 10. Xatolar
+
+| Holat | Xabar |
+|---|---|
+| Sinovchi emas | oddiy "noma'lum buyruq" |
+| Akkaunt ulanmagan | hozirgi kirish taklifi |
+| 2FA | hozirgi "Shu linkga kirib, tasdiqlang" oqimi |
+| Texnik ishlar | hozirgi `maintenance` matni |
+| Reja fayli olinmadi (Drive/Telegram) | ❌ qatorda "reja fayli olinmadi" |
+| eMaktab kutilmagan sahifa | ❌ qatorda qisqa sabab; admin'ga sahifa matnining boshi |
+
+## 11. Sinov
+
+- `node:test`: ruxsat (`ADMIN_ID`, `AUTO_TESTERS`); moslash (sinf raqami, fan,
+  til, chorak, BSB); HTML sof funksiyalar fixture'larda; `importOne` soxta `fetch`
+  bilan (1→2→3 qadam, xato qatorlar → `needs_choice`, `AUTO_DRY_RUN` → `step3` yo'q,
+  `SESSION_EXPIRED` → bir marta qayta kirish); runner (bir o'qituvchiga bitta ish,
+  `AUTO_CONCURRENCY`, bitta xato qolganlarini to'xtatmaydi); `chargeImport`
+  chaqirilmasligi.
+- PGlite: `auto_grading` ustuni va o'qish/yozish.
+- Production: 8-bo'limdagi tartib, admin ishtirokida.
+
+## 12. Quruvchiga qoldirilganlar (o'z qarorim)
+
+- Modul nomlari va fayl tuzilishi.
+- Matnlar `i18n.js` da uz/ru.
+- Ko'rib chiqish xabari uzun bo'lsa bo'laklarga bo'lish (hozirgi `sendChunks`).
+- Muvaffaqiyatni tekshirish usuli (6-bo'lim, 7-qadam) 0-qadamdagi haqiqiy sahifaga qarab tanlanadi.
