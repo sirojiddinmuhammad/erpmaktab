@@ -186,13 +186,17 @@ nusxalaridan olingan test fixture'lari bilan sinaladi.
 0. **O'qish sinovi** (sinovchi akkauntida, import yo'q): login → sinf × fanlar →
    bitta reja bilan 1–2-qadam → ko'rib chiqish jadvali → import bekor qilinadi.
    Haqiqiy HTML nusxalari fixture sifatida saqlanadi (shaxsiy ma'lumotlar olib tashlanib).
-1. `AUTO_DRY_RUN=1` (standart yoqilgan): butun oqim ishlaydi, lekin 6-qadam
-   (`step3`) yuborilmaydi — natija xabarida "🧪 sinov: import yuborilmadi".
-2. Admin roziligi bilan **bitta** sinf × fan haqiqiy import (Tanlov orqali bittasi
-   qoldiriladi). Admin va sinovchi eMaktab'da natijani ko'radi.
-3. Hammasi to'g'ri bo'lsa — qolgan sinf × fanlar.
+1. Admin roziligi bilan **bitta** sinf × fan haqiqiy import — bot o'zi qiladi.
+   Admin va sinovchi eMaktab'da natijani ko'radi (mavzu, uy vazifasi, dars raqami).
+2. Hammasi to'g'ri bo'lsa — qolgan sinf × fanlar.
 
-`AUTO_DRY_RUN` Railway o'zgaruvchisi; admin o'zi o'chiradi.
+(Admin qarori: oxirgi qadamsiz "quruq" sinov bosqichi tashlab ketildi —
+o'qish sinovidan keyin darrov bitta haqiqiy import.)
+
+Himoya: `AUTO_MAX_ITEMS` Railway o'zgaruvchisi (standart **1**) — bitta `/auto`
+ishida ko'pi bilan nechta sinf × fan import qilinadi. Ko'p bo'lsa, ro'yxatda
+birinchi N tasi belgilangan bo'ladi, qolganlari ⬜ (Tanlov bilan almashtirish mumkin).
+Birinchi import tekshirilgach admin uni oshiradi (masalan 50).
 
 ## 9. Ma'lumotlar bazasi
 
@@ -216,7 +220,7 @@ nusxalaridan olingan test fixture'lari bilan sinaladi.
 
 - `node:test`: ruxsat (`ADMIN_ID`, `AUTO_TESTERS`); moslash (sinf raqami, fan,
   til, chorak, BSB); HTML sof funksiyalar fixture'larda; `importOne` soxta `fetch`
-  bilan (1→2→3 qadam, xato qatorlar → `needs_choice`, `AUTO_DRY_RUN` → `step3` yo'q,
+  bilan (1→2→3 qadam, xato qatorlar → `needs_choice`, `AUTO_MAX_ITEMS` chegarasi,
   `SESSION_EXPIRED` → bir marta qayta kirish); runner (bir o'qituvchiga bitta ish,
   `AUTO_CONCURRENCY`, bitta xato qolganlarini to'xtatmaydi); `chargeImport`
   chaqirilmasligi.
