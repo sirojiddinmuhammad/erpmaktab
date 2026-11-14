@@ -96,3 +96,17 @@ export function applyMerges(rows, pairs) {
   });
   return out;
 }
+
+// Birinchi qator (sarlavha) matnlari — brauzersiz importda ustunlarni moslash uchun
+export async function readHeaderRow(buf) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  if (!ws) return [];
+  const head = ws.getRow(1);
+  const n = Math.max(ws.columnCount, head.cellCount);
+  const out = [];
+  for (let c = 1; c <= n; c++) out.push(clean(head.getCell(c).text));
+  while (out.length && !out.at(-1)) out.pop();
+  return out;
+}
