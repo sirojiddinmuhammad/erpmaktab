@@ -65,7 +65,7 @@ test('countColumnSelects counts select_N on step 2', () => {
 test('previewFromHtml reads ready and error rows with row ids', () => {
   const { rows } = previewFromHtml(fx('import-step3-errors.html'));
   assert.equal(rows.length, 10);
-  assert.deepEqual(rows[0], { n: '1', lesson: '1', topic: 'Test mavzu 1', hw: 'Test vazifa 1', rowId: '2555977925239087533', ok: true, status: 'Готов к импорту.' });
+  assert.deepEqual(rows[0], { n: '1', lesson: '1', topic: 'Test mavzu 1', hw: 'Test vazifa 1', rowId: '2555977925239087533', ok: true, replaces: false, status: 'Готов к импорту.' });
   const bad = rows[6];
   assert.equal(bad.ok, false);
   assert.equal(bad.rowId, null);
@@ -127,4 +127,14 @@ test('parseImportResult looks past the page header and returns keyword snippets'
   assert.equal(unknown.ok, null);
   assert.equal(unknown.backAtStep1, false);
   assert.doesNotMatch(unknown.text, /Учитель Сотрудник Помощь/);
+});
+
+test('previewFromHtml marks rows whose existing topic would be replaced', () => {
+  const html = fx('import-step3-ready.html').replace(
+    '<ul class="s2 green strong"> <li>Готов к импорту.</li> </ul>',
+    '<ul class="alerts"> <li>Импортируемая тема урока заменит текущую.</li> <li>Импортируемое ДЗ заменит текущее ДЗ в планировании.</li> </ul>');
+  const { rows } = previewFromHtml(html);
+  assert.equal(rows[0].replaces, true);
+  assert.equal(rows[0].ok, true);
+  assert.equal(rows[1].replaces, false);
 });

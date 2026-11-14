@@ -101,7 +101,8 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
     },
 
     // Bitta sinf × fan: 1-qadam (fayl) → 2-qadam (parametr, ustunlar) → ko'rib chiqish → import
-    async importOne({ file, fileName = 'reja.xlsx', year, school, groupId, subjectId, subgroupId = '', periodId, okOnly = false }) {
+    // checkOnly — faqat ko'rib chiqish jadvali (import yo'q): avtomatik importning tekshiruv bosqichi
+    async importOne({ file, fileName = 'reja.xlsx', year, school, groupId, subjectId, subgroupId = '', periodId, okOnly = false, checkOnly = false }) {
       const html1 = await request(IMPORT);
       const token1 = parseToken(html1);
       if (!token1) throw fail('EMAKTAB_UNEXPECTED', `1-qadam: ${pageText(html1)}`);
@@ -151,6 +152,10 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
         return { state: 'failed', rows, imported: 0, error: `ko'rib chiqishda faqat ${rows.length}/${expected} qator ko'rindi` };
 
       const ready = rows.filter(r => r.ok);
+      if (checkOnly) return {
+        state: 'checked', rows, total: rows.length, ok: ready.length,
+        bad: rows.length - ready.length, existing: rows.filter(r => r.replaces).length,
+      };
       if (ready.length < rows.length && !okOnly) return { state: 'needs_choice', rows, imported: 0, mapReport: map.report };
       if (!ready.length) return { state: 'failed', rows, imported: 0, error: "tayyor qator yo'q" };
 
