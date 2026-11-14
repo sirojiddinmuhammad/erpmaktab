@@ -92,3 +92,25 @@ test('xatolar: download 404, papka 403, papka emas', async () => {
   await assert.rejects(d.folderInfo('DENY'), e => e.code === 'DRIVE_NO_ACCESS');
   await assert.rejects(d.folderInfo('FILE'), e => e.code === 'DRIVE_NO_ACCESS');
 });
+
+test('har so\'rovda timeout signal bor', async () => {
+  const f = fakeFetch([[/\/files\/OK\?alt=media/, () => res(200, Buffer.from('x'))], [/\/files\?/, () => res(200, { files: [] })], [/\/files\/F\?/, () => res(200, { id: 'F', name: 'P', mimeType: 'application/vnd.google-apps.folder' })]]);
+  const d = createDrive({ key, fetch: f });
+  await d.download('OK'); await d.listXlsx('F'); await d.folderInfo('F');
+  for (const c of f.calls) assert.ok(c.opts.signal instanceof AbortSignal, c.url);
+});
+
+test('403 sababi: API yoqilmagan, limit; kalit noto\'g\'ri', async () => {
+  const body = reason => ({ error: { code: 403, errors: [{ reason }] } });
+  const f = fakeFetch([
+    [/\/files\/APIOFF\?/, () => res(403, body('accessNotConfigured'))],
+    [/\/files\/LIMIT\?alt=media/, () => res(403, body('userRateLimitExceeded'))],
+    [/\/files\/DENY\?alt=media/, () => res(403, body('forbidden'))],
+  ]);
+  const d = createDrive({ key, fetch: f });
+  await assert.rejects(d.folderInfo('APIOFF'), e => e.code === 'DRIVE_API_OFF');
+  await assert.rejects(d.download('LIMIT'), e => e.code === 'DRIVE_FAIL');
+  await assert.rejects(d.download('DENY'), e => e.code === 'DRIVE_NOT_FOUND');
+  const bad = createDrive({ key, fetch: async () => res(400, { error: 'invalid_grant' }) });
+  await assert.rejects(bad.folderInfo('X'), e => e.code === 'DRIVE_KEY');
+});

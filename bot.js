@@ -1530,13 +1530,16 @@ bot.callbackQuery(/^a:(.+)$/, async ctx => {
     const p = await db.getPlan(Number(parts[1]));
     if (!p) return ctx.reply('Reja topilmadi.');
     if (String(p.file_id).startsWith('drive:')) {
-      try {
-        const buf = await fetchPlanFile(p.file_id);
-        return ctx.replyWithDocument(new InputFile(buf, p.file_name || 'reja.xlsx'), { caption: p.file_name || '' });
-      } catch (e) {
-        console.error('[drive] pf', e?.code || e?.message);
-        return ctx.reply("Fayl Drive'da topilmadi (o'chirilgan yoki ulashish bekor qilingan).");
-      }
+      // Fonda: Drive sekin javob bersa ham bot boshqa o'qituvchilarga javob beradi
+      fetchPlanFile(p.file_id)
+        .then(buf => ctx.replyWithDocument(new InputFile(buf, p.file_name || 'reja.xlsx'), { caption: p.file_name || '' }))
+        .catch(e => {
+          console.error('[drive] pf', e?.code || e?.message);
+          return ctx.reply(e?.code === 'DRIVE_NOT_FOUND'
+            ? "Fayl Drive'da topilmadi (o'chirilgan yoki ulashish bekor qilingan)."
+            : "Faylni Google Drive'dan olib bo'lmadi, keyinroq urinib ko'ring.").catch(() => {});
+        });
+      return;
     }
     return ctx.replyWithDocument(p.file_id, { caption: p.file_name || '' });
   }

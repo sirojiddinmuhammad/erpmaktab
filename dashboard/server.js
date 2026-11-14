@@ -199,7 +199,7 @@ export function createDashboard(deps) {
     try { return await deps.downloadFile(fileId); }
     catch (e) {
       if (e?.code === 'DRIVE_NOT_FOUND') throw new HttpError(404, 'drive');
-      if (e?.code === 'DRIVE_FAIL') { log('[drive]', e.message); throw new HttpError(502, 'drive'); }
+      if (['DRIVE_FAIL', 'DRIVE_API_OFF', 'DRIVE_KEY'].includes(e?.code)) { log('[drive]', e.code, e.message); throw new HttpError(502, 'drive'); }
       throw e;
     }
   };
@@ -390,6 +390,10 @@ export function createDashboard(deps) {
       if (e instanceof HttpError) throw e;
       if (e?.code === 'DRIVE_NO_ACCESS')
         throw new HttpError(400, `Papka ochilmadi: uni ${deps.drive.email} ga "Ko'ruvchi" qilib ulashing`);
+      if (e?.code === 'DRIVE_API_OFF')
+        throw new HttpError(400, "Google Cloud loyihasida Drive API yoqilmagan: APIs & Services → Google Drive API → Enable");
+      if (e?.code === 'DRIVE_KEY')
+        throw new HttpError(400, "GOOGLE_SA_KEY noto'g'ri yoki o'chirilgan: Railway'dagi kalitni tekshiring");
       log('[drive]', e?.code || '', e?.message || e);
       throw new HttpError(502, 'drive');
     }

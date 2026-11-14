@@ -96,3 +96,17 @@ test('Drive\'dan o\'chirilgan fayl: 404 drive', async () => {
     }
   } finally { await p.close(); }
 });
+
+test('sozlash xatolari: API yoqilmagan, kalit noto\'g\'ri — tushunarli 400', async () => {
+  for (const [code, re] of [['DRIVE_API_OFF', /Drive API yoqilmagan/], ['DRIVE_KEY', /GOOGLE_SA_KEY/]]) {
+    const p = await startPanel({ deps: { drive: fakeDrive({ folderInfo: async () => { throw err(code); }, listXlsx: async () => { throw err(code); } }) }, meta: { drive_folder_id: 'ABCDEFGHIJK' } });
+    try {
+      const cookie = await p.login();
+      for (const [u, body] of [['/api/drive/folder', { url: 'ABCDEFGHIJK' }], ['/api/drive/scan', {}]]) {
+        const r = await post(p, cookie, u, body);
+        assert.equal(r.status, 400, code + u);
+        assert.match((await r.json()).error, re);
+      }
+    } finally { await p.close(); }
+  }
+});
