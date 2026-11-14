@@ -56,8 +56,9 @@ function setup(over = {}) {
     keyOf: name => ({ 'Математика': 'math', 'Информатика': 'it' })[name] ?? null,
     allowed: () => null,
     notifyAdmin: async text => { calls.admin.push(text); },
-    readRows: async () => [{ topic: 'a', hw: '' }, { topic: 'b', hw: '' }, { topic: 'c', hw: '' }],
-    writeRows: async () => {},
+    // xlsx.js readRows bilan bir xil ko'rinish: { rows, sheetName }
+    readRows: async () => { if (over.readRowsError) throw over.readRowsError; return { rows: [{ topic: 'a', hw: '' }, { topic: 'b', hw: '' }, { topic: 'c', hw: '' }], sheetName: 'Reja' }; },
+    writeRows: async (rows, file, sheet) => { calls.written = { rows, sheet }; },
     readFile: async () => Buffer.from('merged'),
     writeFile: async () => {},
     tmpDir: '/tmp/x',
@@ -395,4 +396,28 @@ test('an unclear eMaktab answer is reported to the admin with snippets', async (
   await tick(20);
   assert.match(s.calls.admin.at(-1), /Данные сохранены/);
   assert.match(s.calls.admin.at(-1), /planning\/import/);
+});
+
+test('merge writes the merged rows with the original sheet name', async () => {
+  const s = setup({ maxItems: 1, check: job => (String(job.file) === 'merged' ? checked(6) : checked(6, 1)) });
+  await start(s);
+  await press(s, TESTER, 'au:ok');
+  await press(s, TESTER, 'au:m:0');
+  await s.flow.text(ctxFor(TESTER, { text: '1-2' }));
+  await tick(20);
+  assert.equal(s.calls.written.rows.length, 2);
+  assert.equal(s.calls.written.sheet, 'Reja');
+});
+
+test('a merge that fails tells the teacher and shows the item again', async () => {
+  const s = setup({ maxItems: 1, check: () => checked(6, 1), readRowsError: new Error('Faylda mavzu topilmadi.') });
+  await start(s);
+  await press(s, TESTER, 'au:ok');
+  await press(s, TESTER, 'au:m:0');
+  const c = ctxFor(TESTER, { text: '1-2' });
+  assert.equal(await s.flow.text(c), true);
+  await tick(20);
+  assert.match(allText(c), /Faylda mavzu topilmadi/);
+  assert.deepEqual(data(c), ['au:m:0', 'au:k:0', 'au:s:0']);
+  assert.equal(s.flow.wants(TESTER), false);
 });
