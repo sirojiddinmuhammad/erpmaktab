@@ -23,6 +23,7 @@ export function cookiesFromState(state) {
 export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, timeoutMs = 30_000 } = {}) {
   const keyOf = c => `${c.name}|${String(c.domain || '').replace(/^\./, '')}|${c.path || '/'}`;
   const jar = new Map(cookies.map(c => [keyOf(c), c]));
+  let lastUrl = '';
 
   const cookieFor = url => {
     const host = new URL(url).hostname;
@@ -65,6 +66,7 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       return request(new URL(loc, url).href, { method: 'GET' }, hops + 1);
     }
     const html = await r.text();
+    lastUrl = url;
     if ([500, 502, 503, 504].includes(r.status) || isMaintenance(html)) throw fail('MAINTENANCE');
     if (isLoginPage(r.status, null, html)) throw fail('SESSION_EXPIRED');
     if (!r.ok) throw fail('EMAKTAB_UNEXPECTED', `${r.status} ${pageText(html)}`);
@@ -155,7 +157,7 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       for (const r of rows) p3.append('select', r.ok ? `${r.rowId}=1` : (r.rowId ? `${r.rowId}=0` : '0=0'));
       p3.append('step3', 'Импортировать >');
       const html4 = await request(IMPORT, { method: 'POST', body: p3 });
-      const result = parseImportResult(html4);
+      const result = { ...parseImportResult(html4), url: new URL(lastUrl || IMPORT).pathname };
       if (result.ok === false) return { state: 'failed', rows, imported: 0, result, error: result.text };
       return { state: 'done', rows, imported: ready.length, result };
     },

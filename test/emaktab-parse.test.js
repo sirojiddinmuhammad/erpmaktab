@@ -116,3 +116,15 @@ test('FIX6: a data first row (no header) uses pure column order and reports no h
 test('FIX6: once the topic column is known from headers, unknown columns are skipped', () => {
   assert.deepEqual(mapColumnsFromHeaders(['№', 'Mavzu', 'Soat']).values, [0, 1, -1]);
 });
+
+test('parseImportResult looks past the page header and returns keyword snippets', () => {
+  const nav = '<header>' + 'Учитель Сотрудник Помощь Выход Журналы Расписание '.repeat(10) + '</header>';
+  const ok = parseImportResult(`<html><body>${nav}<div class="msg">Импорт успешно завершён. Загружено 7 записей.</div><input type="file" name="multifile1"></body></html>`);
+  assert.equal(ok.ok, true);
+  assert.match(ok.snippets.join(' '), /успешно/);
+  assert.equal(ok.backAtStep1, true);
+  const unknown = parseImportResult(`<html><body>${nav}<p>Данные сохранены в плане.</p></body></html>`);
+  assert.equal(unknown.ok, null);
+  assert.equal(unknown.backAtStep1, false);
+  assert.doesNotMatch(unknown.text, /Учитель Сотрудник Помощь/);
+});

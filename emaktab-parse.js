@@ -172,12 +172,17 @@ export function isMaintenance(html) {
   return t.length < 1500 && MAINT.test(t);
 }
 
-// step3 dan keyingi sahifa: aniq bo'lmasa ok = null (birinchi haqiqiy importda aniqlanadi)
+// step3 dan keyingi sahifa. Sarlavha/menyu olib tashlanadi, kalit so'zli parchalar qaytariladi
+// (admin hisobotiga — eMaktab javobini o'rganish uchun). Aniq bo'lmasa ok = null.
+const RESULT_WORD = /импорт|успешн|заверш|загружен|сохранен|ошибк|xato|хато|muvaffaqiyat|import qilindi/i;
 export function parseImportResult(html) {
-  const body = String(html || '').replace(/<(script|style|head)\b[\s\S]*?<\/\1>/gi, '');
-  const text = norm(body).slice(0, 300);
-  if (/name=["']step3["']/.test(body)) return { ok: false, text };
-  if (/успешно|импортирован[ыо]?|muvaffaqiyat/i.test(text)) return { ok: true, text };
-  if (/ошибк|xato|хато/i.test(text)) return { ok: false, text };
-  return { ok: null, text };
+  const body = String(html || '').replace(/<(script|style|head|header|nav)\b[\s\S]*?<\/\1>/gi, '');
+  const all = norm(body);
+  const text = all.slice(0, 300);
+  const backAtStep1 = /name=["']multifile1["']/.test(body);
+  const snippets = all.split(/(?<=[.!?])\s+/).filter(s => RESULT_WORD.test(s)).map(s => s.slice(0, 160)).slice(0, 5);
+  if (/name=["']step3["']/.test(body)) return { ok: false, text, snippets, backAtStep1 };
+  const bad = snippets.some(s => /ошибк|xato|хато/i.test(s));
+  const good = snippets.some(s => /успешн|заверш|загружено|импортирован|muvaffaqiyat|import qilindi/i.test(s));
+  return { ok: bad ? false : good ? true : null, text, snippets, backAtStep1 };
 }
