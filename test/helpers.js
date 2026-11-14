@@ -11,7 +11,8 @@ export async function startPanel(over = {}) {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'panel-'));
   const htmlPath = path.join(tmp, 'index.html');
   await fs.writeFile(htmlPath, '<!doctype html><title>Panel</title>');
-  const calls = { listPlans: [], savePlan: [], sendDocument: [], archive: [], markInbox: [], download: [], subjects: [], reload: 0 };
+  const calls = { listPlans: [], savePlan: [], sendDocument: [], archive: [], markInbox: [], download: [], subjects: [], reload: 0, addInboxMany: [], existsMany: [], setMeta: [] };
+  const meta = new Map(Object.entries(over.meta || {}));
   const subjects = new Map([['math', { key: 'math', uz: 'Matematika', ru: 'Математика', alias: [], plans: 2, archived: false }], ['algebra+geometry', { key: 'algebra+geometry', uz: 'Algebra va geometriya', ru: 'Алгебра и геометрия', alias: [], plans: 0, archived: false }], ['x-robot', { key: 'x-robot', uz: 'Robototexnika', ru: 'Робототехника', alias: [], plans: 1, archived: true }]]);
   const inbox = over.inbox || [];
   const plans = over.plans || [];
@@ -29,6 +30,11 @@ export async function startPanel(over = {}) {
     async getInbox(ids) { return inbox.filter(r => !r.done && ids.includes(r.id)); },
     async countInbox() { return inbox.filter(r => !r.done).length; },
     async markInbox(ids, field) { calls.markInbox.push({ ids, field }); for (const r of inbox) if (ids.includes(r.id)) r.done = field; return ids.length; },
+    async addInboxMany(recs) { calls.addInboxMany.push(recs); return recs.length; },
+    async knownDriveIds(ids) { return new Set(ids.filter(i => (over.knownDrive || []).includes(i))); },
+    async existsMany(keys) { calls.existsMany.push(keys); return keys.map((k, i) => (k.grade === 5 ? i : -1)).filter(i => i >= 0); },
+    async getMeta(k) { return meta.get(k) ?? null; },
+    async setMeta(k, v) { calls.setMeta.push([k, v]); meta.set(k, v); },
     async subjectsForPanel() { return [...subjects.values()]; },
     async subjectKeyExists(k) { return subjects.has(k); },
     async insertSubject(v) { calls.subjects.push(['insert', v]); subjects.set(v.key, { ...v, plans: 0, archived: false }); },
@@ -48,6 +54,7 @@ export async function startPanel(over = {}) {
     sendDocument: async (buf, fileName) => { calls.sendDocument.push({ size: buf.length, fileName }); return 'FILE1'; },
     downloadFile: async id => { calls.download.push(id); return Buffer.from('xlsx-bytes'); },
     reloadSubjects: async () => { calls.reload++; },
+    drive: null,
     publicOrigin: ORIGIN,
     htmlPath,
     tmpDir: tmp,

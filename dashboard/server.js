@@ -9,6 +9,7 @@ import { validateFilter, validatePlan, findDuplicates } from './validate.js';
 import { parseFileName, guessSubject } from '../hints.js';
 import { quarterOfDate, schoolYearOfDate } from './inbox.js';
 import { makeSubjectKey, validateSubject } from './subjects.js';
+import { parseFolderId } from './drive.js';
 import { buildCoverage } from './coverage.js';
 
 const PAGE_SIZE = 50;
@@ -16,6 +17,17 @@ const MAX_FILE = 5_000_000;
 const MAX_JSON = 1_000_000;
 const MAX_BATCH = 300;
 const MAX_TAKE = 50;
+const MAX_EXISTS = 500;
+const TAKE_PARALLEL = 4;
+
+// Tartibni saqlab, ko'pi bilan n ta parallel
+async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); } };
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker));
+  return out;
+}
 const SESSION_SEC = 7 * 24 * 3600;
 const EXPIRED_HTML =
   '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
@@ -182,6 +194,16 @@ export function createDashboard(deps) {
     finally { await fs.unlink(tmp).catch(() => {}); }
   };
 
+  // Fayl yuklab olish: Drive xatolari tushunarli javobga aylanadi
+  const fetchFile = async fileId => {
+    try { return await deps.downloadFile(fileId); }
+    catch (e) {
+      if (e?.code === 'DRIVE_NOT_FOUND') throw new HttpError(404, 'drive');
+      if (e?.code === 'DRIVE_FAIL') { log('[drive]', e.message); throw new HttpError(502, 'drive'); }
+      throw e;
+    }
+  };
+
   const coverage = async s =>
     buildCoverage(await db.coverageRows({ medium: s.medium, grading: s.grading }), s);
 
@@ -233,7 +255,7 @@ export function createDashboard(deps) {
     const tmp = path.join(deps.tmpDir, `panel-${crypto.randomBytes(8).toString('hex')}.xlsx`);
     await fs.mkdir(deps.tmpDir, { recursive: true });
     try {
-      await fs.writeFile(tmp, await deps.downloadFile(p.file_id));
+      await fs.writeFile(tmp, await fetchFile(p.file_id));
       const { rows } = await deps.readRows(tmp);
       json(res, 200, { rows: rows.map((r, i) => ({ n: i + 1, topic: r.topic, hw: r.hw })) });
     } finally {
@@ -243,7 +265,7 @@ export function createDashboard(deps) {
 
   on('GET', /^\/api\/plans\/(\d+)\/file$/, async (req, res, u, m) => {
     const p = await planOr404(m[1]);
-    const buf = await deps.downloadFile(p.file_id);
+    const buf = await fetchFile(p.file_id);
     const name = p.file_name || `reja-${p.id}.xlsx`;
     res.writeHead(200, {
       'content-type': 'application/octet-stream',
@@ -339,21 +361,93 @@ export function createDashboard(deps) {
 
   on('POST', /^\/api\/inbox\/take$/, async (req, res) => {
     const ids = idsOr400(await readJson(req), MAX_TAKE);
-    const out = [];
-    const taken = [];
-    for (const r of await db.getInbox(ids)) {
+    const out = await mapLimit(await db.getInbox(ids), TAKE_PARALLEL, async r => {
       let buf;
       try { buf = await deps.downloadFile(r.file_id); }
-      catch (e) { log('[panel] inbox download', e?.message || e); out.push({ inboxId: r.id, error: 'telegram' }); continue; }
-      out.push({
+      catch (e) {
+        log('[panel] inbox download', e?.message || e);
+        return { inboxId: r.id, error: String(r.file_id).startsWith('drive:') ? 'drive' : 'telegram' };
+      }
+      return {
         inboxId: r.id, fileId: r.file_id, fileName: r.file_name,
         topics: await countTopics(buf, r.file_name),
         guess: guessFrom(r.file_name, r.caption, { postedAt: r.posted_at }),
-      });
-      taken.push(r.id);
-    }
+      };
+    });
+    const taken = out.filter(x => !x.error).map(x => x.inboxId);
     if (taken.length) await db.markInbox(taken, 'taken_at');
     json(res, 200, { rows: out });
+  });
+
+  // ---------- Google Drive ----------
+  const driveOr400 = () => {
+    if (!deps.drive) throw new HttpError(400, 'Google Drive ulanmagan');
+    return deps.drive;
+  };
+  const driveCall = async fn => {
+    try { return await fn(); }
+    catch (e) {
+      if (e instanceof HttpError) throw e;
+      if (e?.code === 'DRIVE_NO_ACCESS')
+        throw new HttpError(400, `Papka ochilmadi: uni ${deps.drive.email} ga "Ko'ruvchi" qilib ulashing`);
+      log('[drive]', e?.code || '', e?.message || e);
+      throw new HttpError(502, 'drive');
+    }
+  };
+  const savedFolder = async () => {
+    const id = await db.getMeta('drive_folder_id');
+    return id ? { id, name: (await db.getMeta('drive_folder_name')) || id } : null;
+  };
+
+  on('GET', /^\/api\/drive$/, async (req, res) => {
+    json(res, 200, deps.drive
+      ? { configured: true, email: deps.drive.email, folder: await savedFolder() }
+      : { configured: false, email: null, folder: null });
+  });
+
+  on('POST', /^\/api\/drive\/folder$/, async (req, res) => {
+    const body = await readJson(req);
+    const drive = driveOr400();
+    const id = parseFolderId(body?.url);
+    if (!id) throw new HttpError(400, "Papka havolasi noto'g'ri");
+    const f = await driveCall(() => drive.folderInfo(id));
+    await db.setMeta('drive_folder_id', f.id);
+    await db.setMeta('drive_folder_name', f.name);
+    json(res, 200, { id: f.id, name: f.name });
+  });
+
+  on('POST', /^\/api\/drive\/scan$/, async (req, res) => {
+    req.resume();
+    const drive = driveOr400();
+    const folder = await savedFolder();
+    if (!folder) throw new HttpError(400, 'Avval papkani tanlang');
+    const { files, truncated } = await driveCall(() => drive.listXlsx(folder.id));
+    const known = await db.knownDriveIds(files.map(f => f.id));
+    const fresh = [];
+    let tooBig = 0, knownN = 0;
+    for (const f of files) {
+      if (known.has(f.id)) { knownN++; continue; }
+      if (f.size > MAX_FILE) { tooBig++; continue; }
+      fresh.push({
+        fileId: 'drive:' + f.id, fileUniqueId: 'drive:' + f.id, fileName: f.name, fileSize: f.size,
+        caption: f.path || null, source: 'Google Drive', postedAt: f.modifiedTime || null,
+      });
+    }
+    const added = await db.addInboxMany(fresh);
+    json(res, 200, { found: files.length, added, known: knownN + (fresh.length - added), tooBig, truncated, folder });
+  });
+
+  on('POST', /^\/api\/plans\/exists-many$/, async (req, res) => {
+    const keys = (await readJson(req))?.keys;
+    if (!Array.isArray(keys) || keys.length > MAX_EXISTS) throw new HttpError(400, `keys: ko'pi bilan ${MAX_EXISTS} ta`);
+    const parsed = keys.map(k => {
+      const f = filterOr400(new URLSearchParams({
+        grade: k?.grade ?? '', subject: k?.subject ?? '', quarter: k?.quarter ?? '',
+        year: k?.year ?? '', medium: k?.medium ?? '', grading: k?.grading || 'normal' }));
+      if (!f.grade || !f.subjectKey || !f.quarter || !f.year || !f.medium) throw new HttpError(400, "Kalit to'liq emas");
+      return { grade: f.grade, subjectKey: f.subjectKey, quarter: f.quarter, year: f.year, medium: f.medium, grading: f.grading };
+    });
+    json(res, 200, { existing: await db.existsMany(parsed) });
   });
 
   on('POST', /^\/api\/inbox\/dismiss$/, async (req, res) => {
