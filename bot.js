@@ -277,12 +277,13 @@ bot.on('message:text', async (ctx, next) => {
   }
   if (act === 'cancel') {
     flow.delete(id);
+    auto.clearWait(id);
     await endSession(id);
     return ctx.reply(t(lang, 'cancelled'), { reply_markup: mainKb(lang) });
   }
 
   // avtomatik import javoblari (guruh qatori, birlashtirish) — fonda
-  if (auto.wants(id)) {
+  if (!flow.get(id) && auto.wants(id)) {
     auto.text(ctx).catch(e => console.error('[auto] text', e?.message || e));
     return;
   }

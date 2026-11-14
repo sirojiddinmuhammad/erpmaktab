@@ -78,10 +78,16 @@ export function parseMyClasses(html) {
 const TARGET = { 'Номер урока': 0, 'Тема урока': 1, 'Домашнее задание': 2 };
 
 // Fayl sarlavhasidan select_i qiymatlari (0 raqam, 1 mavzu, 2 vazifa, -1 o'tkazish)
+// Birinchi katak raqam bo'lsa — sarlavha yo'q, 1-qator ma'lumot: faqat tartib bo'yicha.
 export function mapColumnsFromHeaders(headers) {
   const values = headers.map(() => -1);
   const used = new Set();
   const report = [];
+  const hasHeader = !/^\d+$/.test(norm(headers[0]));
+  if (!hasHeader) {
+    headers.forEach((_, i) => { if (i <= 2) values[i] = i; });
+    return { values, done: values.filter(v => v !== -1).length, hasHeader, report: "sarlavha yo'q — tartib bo'yicha" };
+  }
   headers.forEach((h, i) => {
     const label = norm(h);
     const rule = COLUMN_RULES.find(r => r.re.test(label) && !used.has(TARGET[r.target]));
@@ -90,7 +96,8 @@ export function mapColumnsFromHeaders(headers) {
     used.add(values[i]);
     report.push(`${label} -> ${rule.target}`);
   });
-  if (used.size < Math.min(3, headers.length)) {
+  // Mavzu ustuni sarlavhadan topilmasa — bo'sh qolgan joylar tartib bo'yicha
+  if (!used.has(1)) {
     headers.forEach((h, i) => {
       if (i > 2 || values[i] !== -1 || used.has(i)) return;
       values[i] = i;
@@ -98,7 +105,7 @@ export function mapColumnsFromHeaders(headers) {
       report.push(`${norm(h) || `#${i + 1}`} -> ${Object.keys(TARGET)[i]} (tartib bo'yicha)`);
     });
   }
-  return { values, done: values.filter(v => v !== -1).length, report: report.join('\n') };
+  return { values, done: values.filter(v => v !== -1).length, hasHeader, report: report.join('\n') };
 }
 
 export function countColumnSelects(html) {

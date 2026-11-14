@@ -9,6 +9,8 @@ import { quarterOfDate, schoolYearOfDate } from '../dashboard/inbox.js';
 import { parsePairs, applyMerges } from '../xlsx.js';
 
 const TTL = 2 * 3600 * 1000;
+const WAIT_TTL = 10 * 60 * 1000;   // matn javobi (guruh qatori, juftliklar) kutish muddati
+const CHUNK = 3500;
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const rowName = it => `${it.className} · ${it.subjectName}${it.subgroupId ? ` (${it.subgroupName})` : ''}`;
 
@@ -127,13 +129,27 @@ export function createAutoFlow(deps) {
     st.http = createHttp({ cookies: cookiesFromState(state) });
   }
 
-  async function periodFor(st, groupId) {
+  async function periodFor(st, groupId, quarter) {
     st.periods ??= new Map();
     if (!st.periods.has(groupId)) st.periods.set(groupId, await st.http.periods(groupId));
-    return st.periods.get(groupId).find(p => p.n === st.quarter)?.id || null;
+    return st.periods.get(groupId).find(p => p.n === quarter)?.id || null;
+  }
+
+  // Uzun matnni Telegram chegarasidan oshirmay bo'laklab yuboradi; tugmalar oxirgisida
+  async function sendLong(ctx, lines, extra = {}) {
+    const parts = [];
+    let buf = '';
+    for (const l of lines) {
+      if (buf && (buf + l + '\n').length > CHUNK) { parts.push(buf); buf = ''; }
+      buf += `${l.slice(0, CHUNK)}\n`;
+    }
+    if (buf.trim()) parts.push(buf);
+    for (let k = 0; k < parts.length; k++)
+      await ctx.reply(parts[k].trimEnd(), { parse_mode: 'HTML', ...(k === parts.length - 1 ? extra : {}) });
   }
 
   function makeWork(id, st, { okOnly = false, file = null } = {}) {
+    let reloginFailed = false;   // bitta ishda qayta kirish faqat bir marta
     return async item => {
       let buf = file;
       if (!buf) {
@@ -141,10 +157,11 @@ export function createAutoFlow(deps) {
         catch (e) { log('[auto] file', e?.code || e?.message); return { item, state: 'failed', why: 'file' }; }
       }
       const run = async () => {
-        const periodId = await periodFor(st, item.groupId);
+        // chorak, yil, maktab tasdiqlash paytida elementga muzlatilgan
+        const periodId = await periodFor(st, item.groupId, item.quarter);
         if (!periodId) return { state: 'failed', why: 'period' };
         return st.http.importOne({
-          file: buf, fileName: item.plan.file_name || 'reja.xlsx', year: st.year.slice(0, 4), school: st.school,
+          file: buf, fileName: item.plan.file_name || 'reja.xlsx', year: item.year.slice(0, 4), school: item.school,
           groupId: item.groupId, subjectId: item.subjectId, subgroupId: item.subgroupId, periodId, okOnly,
         });
       };
@@ -153,8 +170,10 @@ export function createAutoFlow(deps) {
         try { r = await run(); }
         catch (e) {
           if (e.code !== 'SESSION_EXPIRED') throw e;
+          if (reloginFailed) throw Object.assign(new Error('relogin'), { code: 'RELOGIN' });
           st.periods = null;
-          await relogin(id, st);
+          try { await relogin(id, st); }
+          catch (e2) { if (e2.code === 'RELOGIN') reloginFailed = true; throw e2; }
           r = await run();
         }
         return { item, buf, ...r };
@@ -179,7 +198,7 @@ export function createAutoFlow(deps) {
           choices.push(r);
         } else lines.push(t(lang, 'auto_res_fail', { row, why: r.why ? t(lang, `auto_why_${r.why}`) : esc(r.error || '?') }));
       }
-      if (lines.length > 2) await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+      if (lines.length > 2) await sendLong(ctx, lines);
       for (const r of choices) {
         const bad = r.rows.filter(x => !x.ok).length;
         await ctx.reply(t(lang, 'auto_res_choice', { row: esc(rowName(r.item)), bad }), {
@@ -191,8 +210,9 @@ export function createAutoFlow(deps) {
         });
       }
       const count = s => results.filter(r => r.state === s).length;
-      await notifyAdmin(`🤖 auto · ${id}: ✅ ${count('done')} · ⚠️ ${count('needs_choice')} · ❌ ${count('failed')}` +
-        results.filter(r => r.state === 'failed').map(r => `\n❌ ${esc(rowName(r.item))}: ${esc(r.why || r.error || '')}`).join(''));
+      const report = `🤖 auto · ${id}: ✅ ${count('done')} · ⚠️ ${count('needs_choice')} · ❌ ${count('failed')}` +
+        results.filter(r => r.state === 'failed').map(r => `\n❌ ${esc(rowName(r.item))}: ${esc(r.why || r.error || '')}`).join('');
+      await notifyAdmin(report.length > 3500 ? `${report.slice(0, 3500)}\n…` : report);
     };
   }
 
@@ -215,10 +235,14 @@ export function createAutoFlow(deps) {
     return ctx.reply(t(lang, 'auto_started', { n: 1 }));
   }
 
+  const waiting = st => !!st?.wait && now() - st.waitAt < WAIT_TTL;
+  const setWait = (st, w) => { st.wait = w; st.waitAt = now(); };
+
   return {
     // bot.js uchun sinxron yo'naltirish (uzoq ish handlerni ushlab turmasin)
     allowed: id => canAuto(id, { adminId, testers: config.testers }),
-    wants: id => !!states.get(id)?.wait,
+    wants: id => waiting(get(id)),
+    clearWait: id => { const st = states.get(id); if (st) st.wait = null; },
 
     async command(ctx) {
       const id = ctx.from.id;
@@ -257,6 +281,8 @@ export function createAutoFlow(deps) {
       if (!st) return ctx.reply(t(lang, 'session_end'));
       st.at = now();
       const [, cmd, a, b] = data.split(':');
+      // ish ketayotganda chorak/til/BSB o'zgarmaydi
+      if (['q', 'md', 'lang', 'bsb'].includes(cmd) && runner.busy(id)) return ctx.reply(t(lang, 'auto_busy'));
 
       if (cmd === 'lang' && ['uz', 'ru', 'both'].includes(a)) { await db.setAutoMedium(id, a); return proceed(ctx, id, lang); }
       if (cmd === 'bsb') { await db.setAutoGrading(id, a === '1' ? 'bsb' : 'normal'); return proceed(ctx, id, lang); }
@@ -282,7 +308,7 @@ export function createAutoFlow(deps) {
           : ctx.reply(t(lang, 'auto_pick_sel'), { reply_markup: kb });
       }
       if (cmd === 'seld') return showPreview(ctx, st, lang);
-      if (cmd === 'g' && !a) { st.wait = 'group'; return ctx.reply(t(lang, 'auto_pick_row')); }
+      if (cmd === 'g' && !a) { setWait(st, 'group'); return ctx.reply(t(lang, 'auto_pick_row')); }
       if (cmd === 'gs') {
         const it = st.items[Number(a)];
         const sg = st.sg?.[Number(a)]?.[Number(b)];
@@ -291,7 +317,8 @@ export function createAutoFlow(deps) {
       }
       if (cmd === 'x') { states.delete(id); return ctx.reply(t(lang, 'cancelled')); }
       if (cmd === 'ok') {
-        const picked = st.items.filter(i => i.selected && i.plan).slice(0, config.maxItems);
+        const picked = st.items.filter(i => i.selected && i.plan).slice(0, config.maxItems)
+          .map(i => ({ ...i, quarter: st.quarter, year: st.year, school: st.school }));
         if (!picked.length) return ctx.reply(t(lang, 'auto_none'));
         if (!startJobs(ctx, id, lang, st, picked)) return ctx.reply(t(lang, 'auto_busy'));
         return ctx.reply(t(lang, 'auto_started', { n: picked.length }));
@@ -301,7 +328,7 @@ export function createAutoFlow(deps) {
         if (!ch) return ctx.reply(t(lang, 'session_end'));
         await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
         if (cmd === 's') { st.choices.delete(ch.item.i); return ctx.reply(t(lang, 'auto_skipped', { row: esc(rowName(ch.item)) }), { parse_mode: 'HTML' }); }
-        if (cmd === 'm') { st.wait = 'merge'; st.mergeIdx = ch.item.i; return ctx.reply(t(lang, 'merge_prompt'), { parse_mode: 'HTML' }); }
+        if (cmd === 'm') { setWait(st, 'merge'); st.mergeIdx = ch.item.i; return ctx.reply(t(lang, 'merge_prompt'), { parse_mode: 'HTML' }); }
         st.choices.delete(ch.item.i);
         if (!startJobs(ctx, id, lang, st, [ch.item], { okOnly: true, file: ch.buf })) return ctx.reply(t(lang, 'auto_busy'));
         return ctx.reply(t(lang, 'auto_started', { n: 1 }));
@@ -311,8 +338,8 @@ export function createAutoFlow(deps) {
     // Matn javoblari (guruh qatori, birlashtirish juftliklari). true — matn shu yerda ishlandi.
     async text(ctx) {
       const id = ctx.from.id;
-      const st = states.get(id);
-      if (!st?.wait) return false;
+      const st = get(id);
+      if (!waiting(st)) return false;
       const lang = await L(id);
       const text = ctx.message.text.trim();
       if (st.wait === 'group') {

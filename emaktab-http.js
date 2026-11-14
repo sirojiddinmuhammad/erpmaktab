@@ -5,7 +5,7 @@ import {
   parseToken, parseHidden, parseFormHidden, parseMyClasses, mapColumnsFromHeaders,
   countColumnSelects, previewFromHtml, isLoginPage, isMaintenance, parseImportResult, periodNumber,
 } from './emaktab-parse.js';
-import { readHeaderRow } from './xlsx.js';
+import { readSheetInfo } from './xlsx.js';
 
 const BASE = 'https://schools.emaktab.uz';
 const IMPORT = `${BASE}/v2/journals/planning/import`;
@@ -21,7 +21,8 @@ export function cookiesFromState(state) {
 }
 
 export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, timeoutMs = 30_000 } = {}) {
-  const jar = new Map(cookies.map(c => [c.name, c]));
+  const keyOf = c => `${c.name}|${String(c.domain || '').replace(/^\./, '')}|${c.path || '/'}`;
+  const jar = new Map(cookies.map(c => [keyOf(c), c]));
 
   const cookieFor = url => {
     const host = new URL(url).hostname;
@@ -35,8 +36,14 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       const [pair, ...rest] = line.split(';');
       const i = pair.indexOf('=');
       if (i < 1) continue;
-      const domain = rest.map(s => s.trim()).find(s => /^domain=/i.test(s))?.slice(7) || new URL(url).hostname;
-      jar.set(pair.slice(0, i).trim(), { name: pair.slice(0, i).trim(), value: pair.slice(i + 1).trim(), domain, path: '/' });
+      const attr = rest.map(s => s.trim());
+      const domain = attr.find(s => /^domain=/i.test(s))?.slice(7) || new URL(url).hostname;
+      const path = attr.find(s => /^path=/i.test(s))?.slice(5) || '/';
+      const c = { name: pair.slice(0, i).trim(), value: pair.slice(i + 1).trim(), domain, path };
+      const maxAge = attr.find(s => /^max-age=/i.test(s))?.slice(8);
+      const expires = attr.find(s => /^expires=/i.test(s))?.slice(8);
+      const gone = (maxAge != null && Number(maxAge) <= 0) || (expires && Date.parse(expires) < Date.now());
+      if (gone) jar.delete(keyOf(c)); else jar.set(keyOf(c), c);
     }
   };
 
@@ -68,11 +75,9 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
     try { return JSON.parse(t); } catch { throw fail('EMAKTAB_UNEXPECTED', `json ${path}`); }
   };
 
-  async function columnValues(file, count) {
-    let headers = [];
-    try { headers = await readHeaderRow(file); } catch { /* .xls — tartib bo'yicha */ }
-    const cols = Array.from({ length: count }, (_, i) => headers[i] ?? '');
-    return mapColumnsFromHeaders(cols);
+  // .xls (exceljs o'qiy olmaydi) — sarlavha bor deb, tartib bo'yicha; qatorlar soni tekshirilmaydi
+  async function sheetInfo(file) {
+    try { return await readSheetInfo(file); } catch { return { headers: [], rowCount: null }; }
   }
 
   return {
@@ -96,13 +101,15 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       const token1 = parseToken(html1);
       if (!token1) throw fail('EMAKTAB_UNEXPECTED', `1-qadam: ${pageText(html1)}`);
 
+      const info = await sheetInfo(file);
+      const hasHeader = !/^\d+$/.test(String(info.headers[0] ?? '').trim());
       const fd = new FormData();
       fd.set('__RequestVerificationToken', token1);
       const set = { group: groupId, subject: subjectId, subgroup: subgroupId || '0', period: periodId, year };
       if (school) set.school = school;
       for (const [k, v] of Object.entries({ ...parseFormHidden(html1), ...set })) fd.set(k, v ?? '');
       fd.set('multifile1', new Blob([file]), fileName);
-      fd.set('firstRow', '0');
+      fd.set('firstRow', hasHeader ? '0' : '1');   // 0 — 1-qatorda ustun nomlari, 1 — ma'lumot
       fd.set('step1', 'Далее >');
       const html2 = await request(IMPORT, { method: 'POST', body: fd });
       const stored = parseHidden(html2, 'file');
@@ -110,7 +117,7 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       if (!stored || !token2) throw fail('EMAKTAB_UNEXPECTED', `fayl qabul qilinmadi: ${pageText(html2)}`);
 
       const count = countColumnSelects(html2);
-      const map = await columnValues(file, count);
+      const map = mapColumnsFromHeaders(Array.from({ length: count }, (_, i) => info.headers[i] ?? ''));
       if (!map.values.includes(1)) throw fail('EMAKTAB_UNEXPECTED', 'mavzu ustuni aniqlanmadi');
 
       const p2 = new URLSearchParams();
@@ -124,6 +131,19 @@ export function createEmaktabHttp({ cookies = [], fetch = globalThis.fetch, time
       const { rows } = previewFromHtml(html3);
       const token3 = parseToken(html3);
       if (!rows.length || !token3) throw fail('EMAKTAB_UNEXPECTED', `ko'rib chiqish jadvali yo'q: ${pageText(html3)}`);
+
+      // eMaktab qiymatlarni o'zgartirmaganini tekshiramiz (noto'g'ri sinf/fan/chorakka tushmasin)
+      const h3 = parseFormHidden(html3);
+      const want = { group: groupId, subject: subjectId, period: periodId, year };
+      for (const [k, v] of Object.entries(want))
+        if (String(h3[k] ?? '') !== String(v ?? '')) throw fail('EMAKTAB_UNEXPECTED', `eMaktab qiymatni o'zgartirdi: ${k}`);
+      const sub = v => (v === '0' ? '' : String(v ?? ''));
+      if (sub(h3.subgroup) !== sub(subgroupId)) throw fail('EMAKTAB_UNEXPECTED', "eMaktab qiymatni o'zgartirdi: subgroup");
+
+      // Sahifalash: ko'rib chiqishda fayldagidan kam qator bo'lsa — qisman import qilmaymiz
+      const expected = info.rowCount == null ? null : info.rowCount - (hasHeader ? 1 : 0);
+      if (expected != null && rows.length < expected)
+        return { state: 'failed', rows, imported: 0, error: `ko'rib chiqishda faqat ${rows.length}/${expected} qator ko'rindi` };
 
       const ready = rows.filter(r => r.ok);
       if (ready.length < rows.length && !okOnly) return { state: 'needs_choice', rows, imported: 0, mapReport: map.report };

@@ -105,3 +105,14 @@ test('parseImportResult: unknown page → ok null with short text', () => {
   assert.match(r.text, /Что-то/);
   assert.equal(parseImportResult(fx('import-step3-ready.html')).ok, false); // hali ko'rib chiqish sahifasi
 });
+
+test('FIX6: a data first row (no header) uses pure column order and reports no header', () => {
+  const r = mapColumnsFromHeaders(['1', 'Домашние животные', 'Тема 3, упр. 5']);
+  assert.deepEqual(r.values, [0, 1, 2]);
+  assert.equal(r.hasHeader, false);
+  assert.equal(mapColumnsFromHeaders(['№', 'Тема урока', 'Домашнее задание']).hasHeader, true);
+});
+
+test('FIX6: once the topic column is known from headers, unknown columns are skipped', () => {
+  assert.deepEqual(mapColumnsFromHeaders(['№', 'Mavzu', 'Soat']).values, [0, 1, -1]);
+});

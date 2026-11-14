@@ -31,7 +31,8 @@ function fakeEmaktab({ step3 = 'import-step3-ready.html', final = '<html><body>�
     if (u.startsWith(IMPORT) && (opts.method || 'GET') === 'GET')
       return new Response(fx('import-step1.html'), { headers: { 'set-cookie': 'fresh=1; Path=/; Domain=.emaktab.uz' } });
     if (form?.has('step1')) return new Response(fx('import-step2.html'));
-    if (form?.has('step2')) return new Response(fx(step3));
+    // haqiqiy eMaktab tanlangan guruhni 3-qadamga qaytaradi
+    if (form?.has('step2')) return new Response(fx(step3).replace('name="subgroup" value="0"', `name="subgroup" value="${form.get('subgroup') || '0'}"`));
     if (form?.has('step3')) return new Response(final);
     return new Response('?', { status: 404 });
   };
@@ -153,4 +154,57 @@ test('listClassSubjects, subgroups and periods', async () => {
   assert.equal(sg.length, 3);
   const p = await em.periods('2514332234414922860');
   assert.deepEqual(p.find(x => x.n === 2), { id: '2530691816384972571', name: '2 четверть', n: 2 });
+});
+
+// ---- yakuniy tekshiruv tuzatishlari ----
+test('FIX3: step 3 is not sent when eMaktab changed the class, subject or quarter', async () => {
+  const changed = fx('import-step3-ready.html').replace('name="period" value="2530691816384972571"', 'name="period" value="2530691816384972572"');
+  const fetch = async (url, opts = {}) => {
+    const b = opts.body;
+    if (b instanceof FormData) return new Response(fx('import-step2.html'));
+    if (b instanceof URLSearchParams && b.has('step2')) return new Response(changed);
+    if (b instanceof URLSearchParams && b.has('step3')) throw new Error('step3 must not be sent');
+    return new Response(fx('import-step1.html'));
+  };
+  await assert.rejects(createEmaktabHttp({ cookies, fetch }).importOne(await job()),
+    e => e.code === 'EMAKTAB_UNEXPECTED' && /period/.test(e.message));
+});
+
+test('FIX6: a plan without a header row is sent with firstRow=1 (first row is data)', async () => {
+  const fe = fakeEmaktab();
+  const file = await xlsx([[1, 'Mavzu 1', 'Vazifa 1'], [2, 'Mavzu 2', 'Vazifa 2']]);
+  await createEmaktabHttp({ cookies, fetch: fe.fetch }).importOne(await job({ file }));
+  assert.equal(fe.calls[1].body.get('firstRow'), '1');
+});
+
+test('FIX7: fewer review rows than plan rows (paging) is not reported as imported', async () => {
+  const fe = fakeEmaktab();
+  const file = await xlsx([['№', 'Тема урока', 'Домашнее задание'], ...Array.from({ length: 10 }, (_, k) => [k + 1, `M${k}`, ''])]);
+  const r = await createEmaktabHttp({ cookies, fetch: fe.fetch }).importOne(await job({ file }));
+  assert.equal(r.state, 'failed');
+  assert.match(r.error, /6\/10/);
+  assert.equal(fe.calls.some(c => c.body?.has?.('step3')), false);
+});
+
+test('FIX8: cookies with the same name on different hosts are both kept', async () => {
+  const seen = [];
+  const fetch = async (url, opts = {}) => { seen.push([new URL(url).hostname, opts.headers.cookie]); return new Response(fx('myclasses.html')); };
+  const em = createEmaktabHttp({ fetch, cookies: [
+    { name: 'sid', value: 'school', domain: 'schools.emaktab.uz', path: '/' },
+    { name: 'sid', value: 'login', domain: 'login.emaktab.uz', path: '/' }] });
+  await em.listClassSubjects();
+  assert.equal(seen[0][1], 'sid=school');
+});
+
+test('FIX8: a set-cookie with Max-Age=0 removes the cookie', async () => {
+  let n = 0;
+  const fetch = async (url, opts = {}) => {
+    n++;
+    if (n === 1) return new Response(fx('myclasses.html'), { headers: { 'set-cookie': 'auth=; Max-Age=0; Path=/; Domain=.emaktab.uz' } });
+    assert.equal(opts.headers.cookie, '');
+    return new Response(fx('myclasses.html'));
+  };
+  const em = createEmaktabHttp({ fetch, cookies });
+  await em.listClassSubjects();
+  await em.listClassSubjects();
 });

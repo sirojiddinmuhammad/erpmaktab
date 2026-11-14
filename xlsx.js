@@ -97,11 +97,25 @@ export function applyMerges(rows, pairs) {
   return out;
 }
 
-// Birinchi qator (sarlavha) matnlari — brauzersiz importda ustunlarni moslash uchun
-export async function readHeaderRow(buf) {
+// Brauzersiz import: sarlavha qatori va bo'sh bo'lmagan qatorlar soni
+export async function readSheetInfo(buf) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf);
   const ws = wb.worksheets[0];
+  if (!ws) return { headers: [], rowCount: 0 };
+  let rowCount = 0;
+  ws.eachRow(row => { if (row.values.some(v => clean(v?.text ?? v?.result ?? v) !== '')) rowCount++; });
+  return { headers: await readHeaderRow(buf, ws), rowCount };
+}
+
+// Birinchi qator (sarlavha) matnlari — brauzersiz importda ustunlarni moslash uchun
+export async function readHeaderRow(buf, sheet = null) {
+  let ws = sheet;
+  if (!ws) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    ws = wb.worksheets[0];
+  }
   if (!ws) return [];
   const head = ws.getRow(1);
   const n = Math.max(ws.columnCount, head.cellCount);

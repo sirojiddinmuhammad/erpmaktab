@@ -53,7 +53,7 @@ function setup(over = {}) {
     readFile: async () => Buffer.from('merged'),
     writeFile: async () => {},
     tmpDir: '/tmp/x',
-    now: () => new Date('2026-11-14T10:00:00Z'),
+    now: over.now || (() => new Date('2026-11-14T10:00:00Z')),
     log: () => {},
   };
   const flow = createAutoFlow(deps);
@@ -278,4 +278,64 @@ test('allowed and wants answer synchronously for bot routing', async () => {
   await s.flow.command(ctxFor(TESTER));
   await press(s, TESTER, 'au:g');
   assert.equal(s.flow.wants(TESTER), true);
+});
+
+// ---- yakuniy tekshiruv tuzatishlari ----
+test('FIX1: quarter is frozen at confirm — later quarter change does not move an ok-only re-run', async () => {
+  const rows = [{ ok: true }, { ok: false }];
+  const s = setup({ maxItems: 1, importOne: async job => (job.okOnly ? { state: 'done', imported: 1, rows } : { state: 'needs_choice', rows, imported: 0 }) });
+  await s.flow.command(ctxFor(TESTER));
+  await press(s, TESTER, 'au:ok');
+  await tick();
+  await press(s, TESTER, 'au:q:3');
+  await press(s, TESTER, 'au:k:0');
+  await tick();
+  assert.equal(s.calls.importOne.at(-1).periodId, 'p2');
+});
+
+test('FIX1: quarter/language changes are refused while a run is going', async () => {
+  let release;
+  const s = setup({ maxItems: 1, importOne: () => new Promise(r => { release = () => r({ state: 'done', imported: 1, rows: [] }); }) });
+  await s.flow.command(ctxFor(TESTER));
+  await press(s, TESTER, 'au:ok');
+  await tick();
+  const c = await press(s, TESTER, 'au:q:3');
+  assert.equal(c.replies.at(-1).text, t('uz', 'auto_busy'));
+  release(); await tick();
+});
+
+test('FIX2: a pending text prompt expires and can be cleared', async () => {
+  let clock = new Date('2026-11-14T10:00:00Z');
+  const s = setup({ now: () => clock });
+  await s.flow.command(ctxFor(TESTER));
+  await press(s, TESTER, 'au:g');
+  assert.equal(s.flow.wants(TESTER), true);
+  s.flow.clearWait(TESTER);
+  assert.equal(s.flow.wants(TESTER), false);
+  await press(s, TESTER, 'au:g');
+  clock = new Date('2026-11-14T10:11:00Z');
+  assert.equal(s.flow.wants(TESTER), false);
+});
+
+test('FIX4: a failed re-login is tried only once per run', async () => {
+  const twofa = Object.assign(new Error('TWO_FA'), { es: { close: async () => {} } });
+  const s = setup({ maxItems: 5, loginError: twofa, importOne: async () => { throw Object.assign(new Error('x'), { code: 'SESSION_EXPIRED' }); } });
+  await s.flow.command(ctxFor(TESTER));
+  const c = await press(s, TESTER, 'au:ok');
+  await tick(12);
+  assert.equal(s.calls.logins, 1);
+  assert.equal((c.replies.at(-1).text.match(/❌/g) || []).length, 3);
+});
+
+test('FIX5: long result messages are split under the Telegram limit', async () => {
+  const classes = Array.from({ length: 60 }, (_, k) => ({ groupId: `g${k}`, className: `4-${k} ${'y'.repeat(70)}`, subjects: [{ id: `s${k}`, name: 'Математика' }] }));
+  const s = setup({ maxItems: 60, classes: { school: '1', periodId: 'p2', classes } });
+  const c0 = ctxFor(TESTER);
+  await s.flow.command(c0);
+  const c = await press(s, TESTER, 'au:ok');
+  await tick(80);
+  assert.equal(s.calls.importOne.length, 60);
+  assert.ok(c.replies.length > 2, 'split into several messages');
+  for (const r of [...c0.replies, ...c.replies]) assert.ok(r.text.length <= 4096, `len ${r.text.length}`);
+  assert.ok(s.calls.admin[0].length <= 4000);
 });
