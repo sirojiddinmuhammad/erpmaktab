@@ -81,6 +81,7 @@ dialog .body { padding: 8px 16px 16px; }
 [hidden] { display: none !important; }
 .inbox-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--ok-bg); border-color: transparent; }
 .inbox-bar b { flex: 1; min-width: 180px; }
+.drive-bar { background: var(--chip); }
 .form-grid { display: grid; gap: 10px; }
 .form-grid input { width: 100%; }
 .row-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
@@ -162,6 +163,11 @@ nav button { white-space: nowrap; }
       </div>
       <p class="muted" id="prefill-note" style="margin:10px 0 0" hidden></p>
     </div>
+    <div class="card inbox-bar drive-bar" id="drive-bar" hidden>
+      <b>☁️ Google Drive <span class="muted" id="drive-state"></span></b>
+      <button class="btn primary" id="drive-scan" type="button">Drive'dan olish</button>
+      <button class="btn" id="drive-folder-btn" type="button">Papkani o'zgartirish</button>
+    </div>
     <div class="card inbox-bar" id="inbox" hidden>
       <b>📥 Kiruvchi: <span id="inbox-n">0</span> ta fayl</b>
       <button class="btn primary" id="inbox-take" type="button">Jadvalga olish</button>
@@ -191,6 +197,9 @@ nav button { white-space: nowrap; }
           </tr></thead>
           <tbody id="bulk-body"></tbody>
         </table>
+      </div>
+      <div class="pager" id="b-pager" hidden>
+        <button class="btn" type="button" id="b-prev">‹</button><span class="muted" id="b-page"></span><button class="btn" type="button" id="b-next">›</button>
       </div>
       <div class="pager" style="justify-content:space-between">
         <span class="muted">🆕 yangi · 🔄 mavjudini almashtiradi · ⚠️ to'ldirilmagan yoki takror · ❌ xato</span>
@@ -310,7 +319,7 @@ function showTab(name) {
   history.replaceState(null, '', u);
   if (name === 'plans') loadPlans();
   if (name === 'coverage') loadCoverage();
-  if (name === 'bulk') loadInbox();
+  if (name === 'bulk') { loadInbox(); loadDrive(); }
   if (name === 'subjects') loadSubjects();
 }
 $$('nav [role=tab]').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -517,7 +526,9 @@ function gradesLabel(gs) {
   return parts.join(', ') + '-sinf ▾';
 }
 
+const upStats = { start: 0, done: 0 };
 function addFiles(list) {
+  if (!rows.some(r => r.state === 'up')) { upStats.start = Date.now(); upStats.done = 0; }
   for (const file of list) {
     const bad = checkFile(file);
     const r = { uid: ++uidSeq, name: file.name, file, state: bad ? 'rejected' : 'up', error: bad || '' };
@@ -550,17 +561,42 @@ async function uploadRow(r) {
   } catch (e) {
     r.state = 'err'; r.error = errText(e);
   }
+  upStats.done++;
+  const left = rows.filter(x => x.state === 'up').length;
+  if (left) {
+    const perFile = (Date.now() - upStats.start) / upStats.done;
+    $('#bulk-msg').textContent = `⏳ ${upStats.done}/${upStats.done + left} yuklandi · ~${Math.max(1, Math.ceil(perFile * left / 60000))} daq qoldi`;
+  } else if (upStats.done > 1) {
+    $('#bulk-msg').textContent = `✅ ${upStats.done} ta fayl yuklandi. Tekshirib, "Saqlash" ni bosing.`;
+  }
   renderBulk();
 }
-async function checkExists(r) {
+// Mavjudlik tekshiruvi: qatorlar navbatga yig'ilib, 300 ms da bir so'rov bilan
+const existsQueue = new Set();
+let existsTimer = null;
+function checkExists(r) {
   r.existing = null;
-  if (!complete(r)) return;
-  const sig = keysOf(r).join(',');
+  if (!complete(r)) { existsQueue.delete(r); return; }
+  existsQueue.add(r);
+  if (!existsTimer) existsTimer = setTimeout(flushExists, 300);
+}
+async function flushExists() {
+  existsTimer = null;
+  const batch = [...existsQueue];
+  existsQueue.clear();
+  const items = batch.filter(complete).map(r => ({ r, sig: keysOf(r).join(',') }));
+  const keys = [];
+  for (const it of items) for (const grade of it.r.grades) keys.push({ it, key: {
+    grade, subject: it.r.subject, quarter: it.r.quarter, year: it.r.year, medium: it.r.medium, grading: it.r.bsb ? 'bsb' : 'normal' } });
+  const count = new Map(items.map(it => [it, 0]));
   try {
-    const found = await Promise.all(r.grades.map(grade => api('/api/plans/exists?' + new URLSearchParams({
-      grade, subject: r.subject, quarter: r.quarter, year: r.year,
-      medium: r.medium, grading: r.bsb ? 'bsb' : 'normal' })).then(d => d.exists)));
-    if (keysOf(r).join(',') === sig) { r.existing = found.filter(Boolean).length; renderBulk(); }
+    for (let i = 0; i < keys.length; i += 500) {
+      const part = keys.slice(i, i + 500);
+      const d = await postJson('/api/plans/exists-many', { keys: part.map(k => k.key) });
+      for (const idx of d.existing) count.set(part[idx].it, count.get(part[idx].it) + 1);
+    }
+    for (const it of items) if (keysOf(it.r).join(',') === it.sig) it.r.existing = count.get(it);
+    renderBulk();
   } catch { /* holat ko'rsatilmaydi */ }
 }
 function statusOf(r, dups) {
@@ -634,13 +670,29 @@ function readyRows(dups) {
   const pool = filterActive() ? visibleRows(dups) : rows;
   return pool.filter(r => complete(r) && !keysOf(r).some(k => dups.has(k)));
 }
+// Chizish bitta kadrga yig'iladi: ko'p fayl kelganda ham sahifa javob beradi
+let drawPending = false;
 function renderBulk() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(() => { drawPending = false; drawBulk(); });
+}
+const BULK_PAGE = 100;
+let bulkPage = 1;
+function drawBulk() {
   const dups = duplicateKeys();
   const years = yearOptions(rows.map(r => r.year));
   const sOpts = { uz: subjectOpts('uz'), ru: subjectOpts('ru') };
   renderViewBar();
-  const shown = visibleRows(dups);
-  $('#bv-count').textContent = filterActive() ? `${shown.length} / ${rows.length} ta ko'rsatilmoqda` : (rows.length ? `${rows.length} ta fayl` : '');
+  const all = visibleRows(dups);
+  const pages = Math.max(1, Math.ceil(all.length / BULK_PAGE));
+  bulkPage = Math.min(Math.max(1, bulkPage), pages);
+  const shown = all.slice((bulkPage - 1) * BULK_PAGE, bulkPage * BULK_PAGE);
+  $('#b-pager').hidden = pages < 2;
+  $('#b-page').textContent = `${bulkPage} / ${pages}`;
+  $('#b-prev').disabled = bulkPage <= 1;
+  $('#b-next').disabled = bulkPage >= pages;
+  $('#bv-count').textContent = filterActive() ? `${all.length} / ${rows.length} ta ko'rsatilmoqda` : (rows.length ? `${rows.length} ta fayl` : '');
   $('#bulk-body').innerHTML = shown.length ? shown.map(r => {
     const st = statusOf(r, dups);
     const editable = r.state === 'done';
@@ -732,14 +784,18 @@ function pickGrades(r) {
   $('#dlg').showModal();
 }
 $('#bf').addEventListener('input', () => refreshBulk());
-$('#bv').addEventListener('input', () => renderBulk());
+$('#bv').addEventListener('input', () => { bulkPage = 1; renderBulk(); });
+$('#b-prev').addEventListener('click', () => { bulkPage--; renderBulk(); });
+$('#b-next').addEventListener('click', () => { bulkPage++; renderBulk(); });
 $('#bv-clear').addEventListener('click', () => {
   for (const n of ['medium', 'grade', 'subject', 'status']) bv(n).value = '';
+  bulkPage = 1;
   renderBulk();
 });
 $$('#tab-bulk th[data-sort]').forEach(th => th.addEventListener('click', () => {
   if (view.sort === th.dataset.sort) view.dir = -view.dir;
   else { view.sort = th.dataset.sort; view.dir = 1; }
+  bulkPage = 1;
   renderBulk();
 }));
 $('#b-clear').addEventListener('click', () => {
@@ -753,25 +809,37 @@ $('#b-save').addEventListener('click', async () => {
   // har sinf alohida qator; qaysi qator qaysi faylniki — eslab qolamiz
   const items = ready.flatMap(r => r.grades.map(grade => ({ r, grade })));
   $('#b-save').disabled = true;
-  $('#bulk-msg').textContent = '⏳ Saqlanmoqda…';
-  try {
-    const d = await postJson('/api/plans/batch', { rows: items.map(({ r, grade }) => ({
-      grade, subject: r.subject, quarter: r.quarter, year: r.year, medium: r.medium,
-      grading: r.bsb ? 'bsb' : 'normal', fileId: r.fileId, fileName: r.fileName, topics: r.topics })) });
-    const failed = new Map(d.skipped.map(s => [s.index, s.error]));
-    // saqlanmagan sinflar qatorda qoladi, saqlanganlari olib tashlanadi
-    for (const r of ready) r.grades = [];
-    items.forEach(({ r, grade }, i) => {
-      if (!failed.has(i)) return;
-      r.grades.push(grade);
-      r.saveError = failed.get(i) === 'server' ? 'Saqlanmadi, qayta bosing' : failed.get(i);
-    });
-    rows = rows.filter(r => !ready.includes(r) || r.grades.length);
-    $('#bulk-msg').textContent = `✅ Yangi: ${d.created} · Almashtirildi: ${d.replaced} · O'tkazildi: ${d.skipped.length}` +
-      (d.skipped.length ? ` (${d.skipped.map(s => s.error).join(', ')})` : '');
-  } catch (e) {
-    $('#bulk-msg').textContent = e.status === 401 ? '' : '❌ ' + errText(e);
+  // 200 tadan bo'lib yuboriladi; har element: 'saved' | xato matni | undefined (yuborilmagan)
+  const result = new Array(items.length);
+  let created = 0, replaced = 0, stopped = null;
+  for (let i = 0; i < items.length; i += 200) {
+    $('#bulk-msg').textContent = `⏳ Saqlanmoqda… ${i}/${items.length}`;
+    const part = items.slice(i, i + 200);
+    try {
+      const d = await postJson('/api/plans/batch', { rows: part.map(({ r, grade }) => ({
+        grade, subject: r.subject, quarter: r.quarter, year: r.year, medium: r.medium,
+        grading: r.bsb ? 'bsb' : 'normal', fileId: r.fileId, fileName: r.fileName, topics: r.topics })) });
+      created += d.created; replaced += d.replaced;
+      const failed = new Map(d.skipped.map(x => [x.index, x.error]));
+      part.forEach((_, j) => { result[i + j] = failed.has(j) ? failed.get(j) : 'saved'; });
+    } catch (e) {
+      stopped = e;
+      break;
+    }
   }
+  // saqlanmagan sinflar qatorda qoladi, saqlanganlari olib tashlanadi
+  for (const r of ready) r.grades = [];
+  items.forEach(({ r, grade }, i) => {
+    if (result[i] === 'saved') return;
+    r.grades.push(grade);
+    r.saveError = result[i] == null || result[i] === 'server' ? 'Saqlanmadi, qayta bosing' : result[i];
+  });
+  rows = rows.filter(r => !ready.includes(r) || r.grades.length);
+  const skipped = result.filter(x => x && x !== 'saved');
+  let msg = `✅ Yangi: ${created} · Almashtirildi: ${replaced} · O'tkazildi: ${skipped.length}` +
+    (skipped.length ? ` (${[...new Set(skipped)].join(', ')})` : '');
+  if (stopped && stopped.status !== 401) msg += ` · ❌ To'xtadi: ${errText(stopped)}. Qolganlari jadvalda.`;
+  $('#bulk-msg').textContent = msg;
   renderBulk();
 });
 
@@ -836,7 +904,7 @@ $('#inbox-take').addEventListener('click', async () => {
       $('#bulk-msg').textContent = `⏳ Kiruvchi fayllar olinmoqda… (${ok + bad} ta tayyor)`;
       const d = await postJson('/api/inbox/take', { ids });
       for (const x of d.rows) {
-        if (x.error) { bad++; continue; }
+        if (x.error) { bad++; continue; }   // 'telegram' yoki 'drive'
         const r = { uid: ++uidSeq, name: x.fileName, fromInbox: true };
         applyUpload(r, x);
         rows.push(r);
@@ -846,7 +914,7 @@ $('#inbox-take').addEventListener('click', async () => {
       renderBulk();
       await loadInbox();
     }
-    $('#bulk-msg').textContent = `📥 Jadvalga olindi: ${ok} ta` + (bad ? ` · Telegram'dan olinmadi: ${bad} ta (kiruvchida qoldi)` : '');
+    $('#bulk-msg').textContent = `📥 Jadvalga olindi: ${ok} ta` + (bad ? ` · yuklab olinmadi: ${bad} ta (kiruvchida qoldi)` : '');
   } catch (e) {
     if (e.status !== 401) $('#bulk-msg').textContent = '❌ ' + errText(e);
   }
@@ -878,6 +946,71 @@ $('#dlg-body').addEventListener('click', async e => {
     await loadInbox();
     renderInboxDialog();
   } catch (err) { b.disabled = false; }
+});
+
+// ============ Google Drive ============
+let driveInfo = null;
+async function loadDrive() {
+  try { driveInfo = await api('/api/drive'); } catch { return; }
+  $('#drive-bar').hidden = false;
+  if (!driveInfo.configured) {
+    $('#drive-state').textContent = "· ulanmagan (Railway'da GOOGLE_SA_KEY yo'q)";
+    $('#drive-scan').hidden = true; $('#drive-folder-btn').hidden = true;
+    return;
+  }
+  $('#drive-scan').hidden = false;
+  $('#drive-folder-btn').hidden = !driveInfo.folder;
+  $('#drive-state').textContent = driveInfo.folder ? `· 📁 ${driveInfo.folder.name}` : '· papka tanlanmagan';
+}
+function folderDialog() {
+  $('#dlg-title').textContent = 'Google Drive papkasi';
+  $('#dlg-body').innerHTML = `<form id="drive-form" class="form-grid">
+    <p style="margin:6px 0 0">1. Drive'da papkani oching → <b>Ulashish (Share)</b> → quyidagi manzilni <b>Ko'ruvchi (Viewer)</b> qilib qo'shing:</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><code id="drive-email" style="padding:6px 8px;background:var(--chip);border-radius:6px;word-break:break-all">${esc(driveInfo.email)}</code>
+      <button class="btn" type="button" id="drive-copy">Nusxalash</button></div>
+    <label class="f">2. Papka havolasini shu yerga qo'ying<input type="text" name="url" required placeholder="https://drive.google.com/drive/folders/..." value=""></label>
+    <p class="msg" id="drive-form-msg"></p>
+    <div class="row-actions"><button class="btn" type="button" data-close>Bekor</button><button class="btn primary" type="submit">Saqlash</button></div>
+  </form>`;
+  $('#dlg').showModal();
+  $('#drive-form [name=url]').focus();
+  $('#drive-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(driveInfo.email); $('#drive-copy').textContent = 'Nusxalandi ✓'; } catch { /* qo'lda nusxalanadi */ }
+  });
+  $('#drive-form [data-close]').addEventListener('click', () => $('#dlg').close());
+  $('#drive-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = e.target.querySelector('[type=submit]');
+    btn.disabled = true;
+    try {
+      const f = await postJson('/api/drive/folder', { url: e.target.url.value });
+      $('#dlg').close();
+      await loadDrive();
+      $('#bulk-msg').textContent = `📁 Papka tanlandi: ${f.name}. Endi "Drive'dan olish" ni bosing.`;
+    } catch (err) {
+      btn.disabled = false;
+      $('#drive-form-msg').textContent = '❌ ' + (err.message === 'drive' ? 'Google Drive javob bermadi, qayta urining' : errText(err));
+    }
+  });
+}
+$('#drive-folder-btn').addEventListener('click', folderDialog);
+$('#drive-scan').addEventListener('click', async () => {
+  if (!driveInfo?.folder) return folderDialog();
+  const b = $('#drive-scan');
+  b.disabled = true;
+  $('#bulk-msg').textContent = `⏳ Drive papkasi o'qilmoqda…`;
+  try {
+    const d = await postJson('/api/drive/scan', {});
+    $('#bulk-msg').textContent = `☁️ Drive: ${d.found} ta fayl, ${d.added} tasi kiruvchiga qo'shildi` +
+      (d.known ? ` (${d.known} tasi avval olingan)` : '') +
+      (d.tooBig ? ` · ${d.tooBig} tasi 5 MB dan katta, olinmadi` : '') +
+      (d.truncated ? ` · ⚠️ papkada juda ko'p fayl, faqat birinchi 2000 tasi o'qildi` : '') +
+      (d.added ? '. Endi "Jadvalga olish" ni bosing.' : '');
+    await loadInbox();
+  } catch (e) {
+    if (e.status !== 401) $('#bulk-msg').textContent = '❌ ' + (e.message === 'drive' ? 'Google Drive javob bermadi, qayta urining' : errText(e));
+  }
+  b.disabled = false;
 });
 
 // ============ Fanlar ============
