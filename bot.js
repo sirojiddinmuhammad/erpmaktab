@@ -18,6 +18,10 @@ import { createDashboard } from './dashboard/server.js';
 import { createDrive, parseKey } from './dashboard/drive.js';
 import { withRetry } from './dashboard/telegram.js';
 import { inboxDecision, createInboxNotifier } from './dashboard/inbox.js';
+import { createAutoFlow } from './auto/flow.js';
+import { createRunner } from './auto/runner.js';
+import { readAutoConfig } from './auto/match.js';
+import { createEmaktabHttp } from './emaktab-http.js';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -275,6 +279,12 @@ bot.on('message:text', async (ctx, next) => {
     flow.delete(id);
     await endSession(id);
     return ctx.reply(t(lang, 'cancelled'), { reply_markup: mainKb(lang) });
+  }
+
+  // avtomatik import javoblari (guruh qatori, birlashtirish) — fonda
+  if (auto.wants(id)) {
+    auto.text(ctx).catch(e => console.error('[auto] text', e?.message || e));
+    return;
   }
 
   // birlashtirish javobi
@@ -1261,6 +1271,39 @@ const dash = createDashboard({
 
 const inboxNotifier = createInboxNotifier({
   send: text => bot.api.sendMessage(ADMIN_ID, text),
+});
+
+// ---------- avtomatik import (sinov, yashirin /auto) ----------
+// Faqat ADMIN_ID va AUTO_TESTERS. Bepul: pul kodiga tegmaydi.
+const autoConfig = readAutoConfig();
+const auto = createAutoFlow({
+  db, t, L, adminId: ADMIN_ID, config: autoConfig,
+  runner: createRunner({ concurrency: autoConfig.concurrency }),
+  createHttp: ({ cookies }) => createEmaktabHttp({ cookies }),
+  login: async creds => {
+    const es = new EmaktabSession();
+    await es.launch();
+    try {
+      const { state } = await es.login(creds.username, creds.password);
+      await es.close();
+      return state;
+    } catch (e) {
+      if (e.message === 'TWO_FA') { e.es = es; throw e; }   // askTwoFactor yopadi
+      await es.close();
+      throw e;
+    }
+  },
+  askTwoFactor, fetchPlanFile, keyOf: admin.keyOfName, allowed: liveSubjectKeys,
+  notifyAdmin, readRows, writeRows,
+  readFile: p => fs.readFile(p), tmpDir: TMP,
+  writeFile: async (p, b) => { await fs.mkdir(TMP, { recursive: true }); await fs.writeFile(p, b); },
+});
+bot.command('auto', (ctx, next) => {
+  if (!auto.allowed(ctx.from.id)) return next();
+  auto.command(ctx).catch(e => console.error('[auto] command', e?.message || e));
+});
+bot.callbackQuery(/^au:/, ctx => {
+  auto.callback(ctx).catch(e => console.error('[auto] callback', e?.message || e));
 });
 
 bot.command('panel', async ctx => {

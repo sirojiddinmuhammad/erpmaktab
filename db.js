@@ -553,6 +553,17 @@ export async function findPlanByKey({ grade, subjectKey, quarter, year, medium, 
   return rows[0] ? { id: Number(rows[0].id), archived: rows[0].archived_at != null } : null;
 }
 
+// Avtomatik import: faqat arxivlanmagan reja, fayli bilan
+export const FIND_ACTIVE_PLAN_SQL = `select id, topics, file_id, file_name from plans
+      where grade=$1 and subject_key=$2 and quarter=$3
+        and year=$4 and medium=$5 and grading=$6 and archived_at is null
+      order by id desc limit 1`;
+export async function findActivePlan({ grade, subjectKey, quarter, year, medium, grading }) {
+  const { rows } = await pool.query(FIND_ACTIVE_PLAN_SQL,
+    [grade, subjectKey, quarter, year, medium, grading || 'normal']);
+  return rows[0] ? { ...rows[0], id: Number(rows[0].id) } : null;
+}
+
 // Qamrov uchun: shu til va baholashdagi barcha arxivlanmagan rejalar
 export async function coverageRows({ medium, grading }) {
   const { rows } = await pool.query(

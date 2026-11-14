@@ -35,3 +35,11 @@ test('setAutoGrading / setAutoMedium rad etadi noto\'g\'ri qiymatni (bazaga borm
   await assert.rejects(db.setAutoGrading(1, 'x'), /grading/);
   await assert.rejects(db.setAutoMedium(1, 'en'), /medium/);
 });
+
+test('FIND_ACTIVE_PLAN_SQL: faqat arxivlanmagan, kalitning 6 maydoni', async () => {
+  const db = await import('../db.js');
+  assert.match(db.FIND_ACTIVE_PLAN_SQL, /archived_at is null/);
+  for (const c of ['grade=$1', 'subject_key=$2', 'quarter=$3', 'year=$4', 'medium=$5', 'grading=$6'])
+    assert.ok(db.FIND_ACTIVE_PLAN_SQL.includes(c), c);
+  assert.match(db.FIND_ACTIVE_PLAN_SQL, /file_id/);
+});
