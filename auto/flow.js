@@ -12,7 +12,7 @@ const TTL = 2 * 3600 * 1000;
 const WAIT_TTL = 10 * 60 * 1000;   // matn javobi (guruh qatori, juftliklar) kutish muddati
 const CHUNK = 3500;
 const esc = x => String(x ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const rowName = it => `${it.className} · ${it.subjectName}${it.subgroupId ? ` (${it.subgroupName})` : ''}`;
+const rowName = it => `${it.className} · ${it.subjectName} · ${it.subgroupName || 'Весь класс'}`;
 
 export function createAutoFlow(deps) {
   const { db, t, L, adminId, config, runner, createHttp, login, askTwoFactor, fetchPlanFile,
@@ -211,7 +211,10 @@ export function createAutoFlow(deps) {
       }
       const count = s => results.filter(r => r.state === s).length;
       const report = `🤖 auto · ${id}: ✅ ${count('done')} · ⚠️ ${count('needs_choice')} · ❌ ${count('failed')}` +
-        results.filter(r => r.state === 'failed').map(r => `\n❌ ${esc(rowName(r.item))}: ${esc(r.why || r.error || '')}`).join('');
+        results.filter(r => r.state === 'failed').map(r => `\n❌ ${esc(rowName(r.item))}: ${esc(r.why || r.error || '')}`).join('') +
+        // eMaktab javobi noaniq: sahifa manzili va kalit so'zli parchalar (natija sahifasini o'rganish uchun)
+        results.filter(r => r.state === 'done' && r.result?.ok === null).map(r =>
+          `\n❔ ${esc(rowName(r.item))}: ${esc(r.result.url || '')} · step1=${r.result.backAtStep1 ? 'ha' : "yo'q"} · ${esc((r.result.snippets || []).join(' | ') || r.result.text || '')}`).join('');
       await notifyAdmin(report.length > 3500 ? `${report.slice(0, 3500)}\n…` : report);
     };
   }

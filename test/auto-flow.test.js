@@ -123,9 +123,9 @@ test('preview lists items with plan status, quarter and replacement warning', as
   await s.flow.command(ctx);
   const msg = ctx.replies.at(-1).text;
   assert.match(msg, /2-chorak · 2026\/2027/);
-  assert.match(msg, /4-A · Математика — ✅/);
+  assert.match(msg, /4-A · Математика · Весь класс — ✅/);
   assert.match(msg, /34/);
-  assert.match(msg, /7-B · Информатика — ❌/);
+  assert.match(msg, /7-B · Информатика · Весь класс — ❌/);
   assert.match(msg, /almashtiriladi/);
   const b = buttons(ctx.replies.at(-1)).map(x => x.callback_data);
   for (const d of ['au:ok', 'au:q', 'au:g', 'au:sel', 'au:x']) assert.ok(b.includes(d), d);
@@ -163,7 +163,7 @@ test('Tasdiqlash runs in background with the right job and reports', async () =>
   assert.deepEqual({ year: j.year, school: j.school, periodId: j.periodId, subgroupId: j.subgroupId },
     { year: '2026', school: '100', periodId: 'p2', subgroupId: '' });
   assert.ok(Buffer.isBuffer(j.file));
-  assert.match(c.replies.at(-1).text, /✅ 4-A · Математика — 34/);
+  assert.match(c.replies.at(-1).text, /✅ 4-A · Математика · Весь класс — 34/);
   assert.equal(s.calls.admin.length, 1);
 });
 
@@ -338,4 +338,21 @@ test('FIX5: long result messages are split under the Telegram limit', async () =
   assert.ok(c.replies.length > 2, 'split into several messages');
   for (const r of [...c0.replies, ...c.replies]) assert.ok(r.text.length <= 4096, `len ${r.text.length}`);
   assert.ok(s.calls.admin[0].length <= 4000);
+});
+
+test('preview and results always show the group', async () => {
+  const s = setup({ maxItems: 1 });
+  const ctx = ctxFor(TESTER);
+  await s.flow.command(ctx);
+  assert.match(ctx.replies.at(-1).text, /4-A · Математика · Весь класс/);
+});
+
+test('an unclear eMaktab answer is logged with its snippets for the admin', async () => {
+  const logs = [];
+  const s = setup({ maxItems: 1, importOne: async () => ({ state: 'done', imported: 7, rows: [], result: { ok: null, text: 'x', snippets: ['Данные сохранены'], backAtStep1: true, url: '/v2/journals/planning/import' } }) });
+  s.flow; await s.flow.command(ctxFor(TESTER));
+  await press(s, TESTER, 'au:ok');
+  await tick();
+  assert.match(s.calls.admin.at(-1), /Данные сохранены/);
+  assert.match(s.calls.admin.at(-1), /planning\/import/);
 });
